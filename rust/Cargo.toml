@@ -43,3 +43,4 @@ opt-level = 3
 [[bench]]
 name = "verify"
 harness = false
+required-features = ["bench-splits"]
