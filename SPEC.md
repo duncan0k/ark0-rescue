@@ -1,7 +1,11 @@
-# VOLEitH rescue proofs: specification v0.1
+# VOLEitH rescue proofs: specification v0.2
 
 Status: **draft for review, not frozen** (2026-10-14). Nothing here has had an
-external cryptographic review.
+external cryptographic review. v0.2 replaces v0.1, which was never deployed: the
+construction is the same, but the 128 challenge bits are spread over 24 GGM
+trees of mixed depth (8 trees of depth 6, then 16 of depth 5) instead of 16
+trees of depth 8, because verification with 16 trees was too slow for the
+rescue lane's validation weight (NOTES.md, "v0.2 tree split").
 
 This document specifies a non-interactive zero-knowledge proof of knowledge,
 used as a signature of knowledge on a public message, for the signet rescue
@@ -14,7 +18,7 @@ Boolean constraint layer, and defines one statement:
 
 The Python package in `python/voleith` is the executable form of this
 specification. Where this text and the code disagree, that is a bug in one of
-them; `vectors/statement1-v0.1.json` pins the intended behaviour.
+them; `vectors/statement1-v0.2.json` pins the intended behaviour.
 
 Sources: the approved plan `R1-voleith-plan.md`, the rescue-lane interface in
 `m4-design-2026-10-14.md` §11 and the owner decisions in `m4-plan-2026-10-14.md`
@@ -50,7 +54,7 @@ references are listed in §17.
   4 or 8 bytes, little-endian.
 - `⊕` is XOR of bit strings or addition in GF(2^128); `·` is multiplication in
   GF(2) or GF(2^128) as the context requires.
-- `λ = 128`, `τ = 16`, `k = 8`, `N = 2^k = 256` (§2).
+- `λ = 128`; `τ = 24` trees; tree `i` has depth `k_i` and `N_i = 2^{k_i}` leaves (§2).
 - `ℓ` is the number of witness bits of a statement and `ℓ̂ = ℓ + 3λ` the VOLE
   length (§5).
 
@@ -79,18 +83,22 @@ Reduction: `X^128 ≡ X^7 + X^2 + X + 1`.
 
 | Symbol | Value | Meaning |
 |---|---|---|
-| version byte | `0x01` | protocol version v0.1 (§16) |
+| version byte | `0x02` | protocol version v0.2 (§16) |
 | `λ` | 128 | security parameter, field size, seed size in bits |
-| `τ` | 16 | number of GGM trees (small VOLE instances) |
-| `k` | 8 | tree depth; `τ·k = λ` |
-| `N` | 256 | leaves per tree |
+| `τ` | 24 | number of GGM trees (small VOLE instances) |
+| `τ0`, `k0` | 8, 6 | the first `τ0` trees have depth `k0 = ⌈λ/τ⌉` |
+| `τ1`, `k1` | 16, 5 | the other `τ1 = τ − τ0` trees have depth `k1 = ⌊λ/τ⌋`; `τ0 = λ mod τ` |
+| `k_i`, `N_i` | | depth of tree `i` (`k0` if `i < τ0`, else `k1`) and its `N_i = 2^{k_i}` leaves; `Σ_i k_i = τ0·k0 + τ1·k1 = λ` |
 | VOLE rows | `ℓ̂ = ℓ + 128 + 256` | witness rows, QuickSilver mask rows, consistency-hash mask rows |
 | `ρ` | 32 bytes | hedging randomness per proof |
 | grinding | none | |
 | max message | 65,535 bytes | |
 
-The parameters follow R1 (τ = 16, k = 8, no grinding). For statement 0x01,
-`ℓ = 42,071` and `C = 42,071` constraints (§7.5).
+This is the only parameter set of v0.2. The split rule is FAEST v1.1's
+(e.g. FAEST-128s: `τ = 11`, 7 trees of depth 12 and 4 of depth 11) applied to
+`τ = 24`; `τ` was chosen by measured verification cost (NOTES.md, "v0.2 tree
+split"). v0.1 used R1's `τ = 16`, `k = 8`; no grinding in either. For statement
+0x01, `ℓ = 42,071` and `C = 42,071` constraints (§7.5).
 
 ## 3. Primitives and domain separation
 
@@ -100,7 +108,7 @@ Every hash, PRG and random-oracle call is
 
 ```
 SHAKE256[name](data, L) = SHAKE256( u8(|T|) ‖ T ‖ data , L bytes ),
-T = ASCII "VOLEitH-rescue/v0.1/" ‖ name
+T = ASCII "VOLEitH-rescue/v0.2/" ‖ name
 ```
 
 The tag `T` contains the protocol version, so a new version changes every call.
@@ -112,16 +120,16 @@ each input encoding is injective.
 
 | name | input `data` | output | role (FAEST analogue) |
 |---|---|---|---|
-| `mu` | `u8(0x01) ‖ u8(sid) ‖ u16le(\|pub\|) ‖ pub ‖ u64le(\|m\|) ‖ m` | 32 | message/statement digest μ (`H_2^0`) |
+| `mu` | `u8(0x02) ‖ u8(sid) ‖ u16le(\|pub\|) ‖ pub ‖ u64le(\|m\|) ‖ m` | 32 | message/statement digest μ (`H_2^0`) |
 | `rnd` | `u16le(\|x\|) ‖ x ‖ μ ‖ ρ` | 32 | root seed `r` (bytes 0–15) and `iv_pre` (16–31) (`H_3`) |
 | `iv` | `iv_pre ‖ μ` | 16 | IV of this proof (v3 `H_4`) |
-| `root` | `iv ‖ r` | 256 | tree roots `r_0..r_15`, 16 bytes each (PRG) |
+| `root` | `iv ‖ r` | `16τ` = 384 | tree roots `r_0..r_23`, 16 bytes each (PRG) |
 | `ggm` | `iv ‖ u8(i) ‖ u16le(n) ‖ seed_n` | 32 | children of GGM node `n` of tree `i` (PRG) |
-| `leaf` | `iv ‖ u8(i) ‖ u16le(N+j) ‖ seed_{N+j}` | 48 | `sd_{i,j}` (16) ‖ `com_{i,j}` (32) (`H_0`) |
-| `exp` | `iv ‖ u8(i) ‖ u16le(N+j) ‖ sd_{i,j}` | `⌈ℓ̂/8⌉` | leaf expansion `r_{i,j}` (PRG) |
-| `tree` | `iv ‖ u8(i) ‖ com_{i,0} ‖ … ‖ com_{i,255}` | 32 | tree commitment `h_i` (`H_1`) |
-| `hcom` | `h_0 ‖ … ‖ h_15` | 32 | VOLE commitment `hcom` (`H_1`) |
-| `ch1` | `μ ‖ hcom ‖ enc(c_1) ‖ … ‖ enc(c_15) ‖ iv_pre` | 32 | `chall1` (`H_2^1`) |
+| `leaf` | `iv ‖ u8(i) ‖ u16le(N_i+j) ‖ seed_{N_i+j}` | 48 | `sd_{i,j}` (16) ‖ `com_{i,j}` (32) (`H_0`) |
+| `exp` | `iv ‖ u8(i) ‖ u16le(N_i+j) ‖ sd_{i,j}` | `⌈ℓ̂/8⌉` | leaf expansion `r_{i,j}` (PRG) |
+| `tree` | `iv ‖ u8(i) ‖ com_{i,0} ‖ … ‖ com_{i,N_i−1}` | 32 | tree commitment `h_i` (`H_1`) |
+| `hcom` | `h_0 ‖ … ‖ h_23` | 32 | VOLE commitment `hcom` (`H_1`) |
+| `ch1` | `μ ‖ hcom ‖ enc(c_1) ‖ … ‖ enc(c_23) ‖ iv_pre` | 32 | `chall1` (`H_2^1`) |
 | `hv` | `Ṽ_0 ‖ … ‖ Ṽ_127` | 32 | `h_V` (`H_1`) |
 | `ch2` | `chall1 ‖ ũ ‖ h_V ‖ enc(d)` | 64 | `chall2` (`H_2^2`) |
 | `ch3` | `chall2 ‖ ã ‖ b̃` | 16 | `chall3` (`H_2^3`) |
@@ -142,29 +150,31 @@ each input encoding is injective.
   share the non-secret prefix `iv ‖ u8(i) ‖ u16le(n)` (a `leaf` and an `exp` call
   on the same leaf differ only by tag), the single `root` call has its own tag,
   and `iv` separates proofs. A seed guess therefore tests one target.
-- **Cost.** The verifier expands `16 × 255` leaves of `⌈ℓ̂/8⌉ = 5,307` bytes,
-  about 21.7 MB of SHAKE256 output for statement 0x01. That dominates
-  verification (§14, NOTES.md). AES-NI would be several times faster.
+- **Cost.** The verifier expands `Σ_i (N_i − 1) = 1,000` leaves of
+  `⌈ℓ̂/8⌉ = 5,307` bytes, about 5.3 MB of SHAKE256 output for statement 0x01
+  (v0.1: 4,080 leaves, 21.7 MB). That still dominates verification (§14,
+  NOTES.md). AES-NI would be several times faster.
 
 ## 4. All-but-one vector commitment
 
-Each tree `i ∈ [0, 16)` is a GGM tree of depth `k = 8` with heap numbering:
-the root is node 1, the children of node `n` are `2n` and `2n+1`, and leaf `j`
-is node `N + j`.
+Each tree `i ∈ [0, τ)` is a GGM tree of depth `k_i` (§2) with `N_i = 2^{k_i}`
+leaves and heap numbering: the root is node 1, the children of node `n` are `2n`
+and `2n+1`, and leaf `j` is node `N_i + j`. Node indices are below `2^{k0+1}` and
+fit the `u16le` fields.
 
 ### 4.1 Roots
 
-`(r_0 ‖ … ‖ r_15) = SHAKE256[root](iv ‖ r, 256)`.
+`(r_0 ‖ … ‖ r_{τ−1}) = SHAKE256[root](iv ‖ r, 16τ)`.
 
 ### 4.2 Commit (prover)
 
 ```
 seed_1 = r_i
-for n = 1 .. N-1:                      (ascending)
+for n = 1 .. N_i-1:                    (ascending)
     seed_{2n} ‖ seed_{2n+1} = SHAKE256[ggm](iv ‖ u8(i) ‖ u16le(n) ‖ seed_n, 32)
-for j = 0 .. N-1:
-    sd_{i,j} ‖ com_{i,j} = SHAKE256[leaf](iv ‖ u8(i) ‖ u16le(N+j) ‖ seed_{N+j}, 48)
-h_i = SHAKE256[tree](iv ‖ u8(i) ‖ com_{i,0} ‖ … ‖ com_{i,N-1}, 32)
+for j = 0 .. N_i-1:
+    sd_{i,j} ‖ com_{i,j} = SHAKE256[leaf](iv ‖ u8(i) ‖ u16le(N_i+j) ‖ seed_{N_i+j}, 48)
+h_i = SHAKE256[tree](iv ‖ u8(i) ‖ com_{i,0} ‖ … ‖ com_{i,N_i-1}, 32)
 ```
 
 `sd_{i,j}` is 16 bytes, `com_{i,j}` 32 bytes. As in FAEST v1.1, each leaf key is
@@ -173,19 +183,20 @@ not the PRG-based ones of FAEST v2/v3 (§15).
 
 ### 4.3 Open (prover)
 
-For the hidden leaf `j*`, the path nodes are `p_d = (N + j*) >> (k − d)` for
-depths `d = 1..k`, and the co-path nodes `s_d = p_d ⊕ 1`. The opening is
+For the hidden leaf `j*`, the path nodes are `p_d = (N_i + j*) >> (k_i − d)` for
+depths `d = 1..k_i`, and the co-path nodes `s_d = p_d ⊕ 1`. The opening is
 
 ```
-open_i = seed_{s_1} ‖ seed_{s_2} ‖ … ‖ seed_{s_k} ‖ com_{i,j*}      (k·16 + 32 = 160 bytes)
+open_i = seed_{s_1} ‖ seed_{s_2} ‖ … ‖ seed_{s_{k_i}} ‖ com_{i,j*}      (k_i·16 + 32 bytes)
 ```
 
-(co-path top-down, then the hidden leaf's commitment), as in FAEST v1.1 VC.Open.
+(co-path top-down, then the hidden leaf's commitment), as in FAEST v1.1 VC.Open:
+128 bytes for depth 6, 112 for depth 5.
 
 ### 4.4 Reconstruct (verifier)
 
-Given `open_i` and `j*`: set `seed_{s_d}` from the opening for `d = 1..k`; for
-`n = 2..N-1` in ascending order, if `seed_n` is known, derive its children as in
+Given `open_i` and `j*`: set `seed_{s_d}` from the opening for `d = 1..k_i`; for
+`n = 2..N_i-1` in ascending order, if `seed_n` is known, derive its children as in
 §4.2. Every leaf except `j*` is now known. Compute `(sd_{i,j}, com_{i,j})` for
 `j ≠ j*`, take `com_{i,j*}` from the opening, and recompute `h_i`. Path nodes and
 the hidden leaf's seed are never known to the verifier.
@@ -195,15 +206,15 @@ the hidden leaf's seed are never known to the verifier.
 ### 5.1 Leaf expansion
 
 `r_{i,j}` = the first `ℓ̂` bits (§1.2) of
-`SHAKE256[exp](iv ‖ u8(i) ‖ u16le(N+j) ‖ sd_{i,j}, ⌈ℓ̂/8⌉)`.
+`SHAKE256[exp](iv ‖ u8(i) ‖ u16le(N_i+j) ‖ sd_{i,j}, ⌈ℓ̂/8⌉)`.
 
 ### 5.2 ConvertToVOLE
 
 Prover, for tree `i`, with `bit_b(j)` the bit `b` of the integer `j`:
 
 ```
-u_i     = ⊕_{j ∈ [0,N)} r_{i,j}
-v_{i,b} = ⊕_{j : bit_b(j) = 1} r_{i,j}               for b ∈ [0, k)
+u_i     = ⊕_{j ∈ [0,N_i)} r_{i,j}
+v_{i,b} = ⊕_{j : bit_b(j) = 1} r_{i,j}               for b ∈ [0, k_i)
 ```
 
 Verifier, knowing every `r_{i,j}` except `j* = δ_i` (§5.3):
@@ -218,15 +229,24 @@ computing these sums (e.g. FAEST's divide-and-conquer) is conforming.
 ### 5.3 Corrections and the combined VOLE
 
 `Δ ∈ GF(2^128)` is `chall3` (§8) read as a field element; `Δ_j` denotes its
-bit `j`. Tree `i` uses bits `[8i, 8i+8)`: its index `δ_i = Σ_b Δ_{8i+b}·2^b` is
-simply byte `i` of `chall3`, so `bit_b(δ_i) = Δ_{8i+b}`. The hidden leaf of tree
-`i` is `j* = δ_i`.
+bit `j`. **Challenge decoding** (FAEST's ChalDec): tree `i` uses the `k_i` bits of
+`Δ` starting at
+
+```
+o_i = Σ_{i' < i} k_{i'} = k0·i                    if i < τ0
+                        = k0·τ0 + k1·(i − τ0)     otherwise
+```
+
+and its index is `δ_i = Σ_{b < k_i} Δ_{o_i+b}·2^b`, so `bit_b(δ_i) = Δ_{o_i+b}`. The
+ranges `[o_i, o_i + k_i)` partition `[0, 128)`. The hidden leaf of tree `i` is
+`j* = δ_i`. For `τ = 24`, tree `i < 8` uses bits `[6i, 6i + 6)` and tree `i ≥ 8`
+uses bits `[48 + 5(i − 8), 53 + 5(i − 8))`.
 
 ```
 u   = u_0
-c_i = u_0 ⊕ u_i                              for i ∈ [1, 16)    (sent in the proof)
-V_{8i+b} = v_{i,b}                           (prover, column 8i+b)
-Q_{8i+b} = q_{i,b} ⊕ Δ_{8i+b}·c_i  (i ≥ 1),  Q_b = q_{0,b}       (verifier)
+c_i = u_0 ⊕ u_i                              for i ∈ [1, τ)     (sent in the proof)
+V_{o_i+b} = v_{i,b}                          (prover, column o_i+b, b < k_i)
+Q_{o_i+b} = q_{i,b} ⊕ Δ_{o_i+b}·c_i  (i ≥ 1),  Q_b = q_{0,b}     (verifier)
 ```
 
 For an honest prover `Q_j = V_j ⊕ Δ_j·u` for every column `j ∈ [0,128)`.
@@ -531,6 +551,9 @@ SHA-256 of this byte string:
 - standalone compression circuit:
   `c0a978cb3bf40e83098fbf7b74226c557842bc09892598b66bdf3c7225c29114`
 
+The label "circuit v0.1" is the version of the circuit layer, which v0.2 does
+not change (§16).
+
 An independent implementation that follows §7.2–§7.5 reproduces these digests.
 
 ### 7.7 Encoding soundness
@@ -574,15 +597,15 @@ them: an implementation that masked the padding and then hashed re-encoded
 values would accept several byte strings for one proof (malleable `wtxid`).
 
 ```
-μ        = SHAKE256[mu](u8(0x01) ‖ u8(sid) ‖ u16le(|pub|) ‖ pub ‖ u64le(|m|) ‖ m, 32)
+μ        = SHAKE256[mu](u8(0x02) ‖ u8(sid) ‖ u16le(|pub|) ‖ pub ‖ u64le(|m|) ‖ m, 32)
 r‖iv_pre = SHAKE256[rnd](u16le(|x|) ‖ x ‖ μ ‖ ρ, 32)          (prover only)
 iv       = SHAKE256[iv](iv_pre ‖ μ, 16)
-hcom     = SHAKE256[hcom](h_0 ‖ … ‖ h_15, 32)
-chall1   = SHAKE256[ch1](μ ‖ hcom ‖ enc(c_1) ‖ … ‖ enc(c_15) ‖ iv_pre, 32)
+hcom     = SHAKE256[hcom](h_0 ‖ … ‖ h_{τ−1}, 32)
+chall1   = SHAKE256[ch1](μ ‖ hcom ‖ enc(c_1) ‖ … ‖ enc(c_{τ−1}) ‖ iv_pre, 32)
 h_V      = SHAKE256[hv](Ṽ_0 ‖ … ‖ Ṽ_127, 32)
 chall2   = SHAKE256[ch2](chall1 ‖ ũ ‖ h_V ‖ enc(d), 64)
 chall3   = SHAKE256[ch3](chall2 ‖ enc(ã) ‖ enc(b̃), 16)
-Δ        = chall3 as a field element; δ_i = chall3[i]
+Δ        = chall3 as a field element; δ_i decoded from Δ (§5.3)
 ```
 
 - Every challenge descends from μ, which binds the version byte, the statement
@@ -604,12 +627,12 @@ exactly once with `n = 32`:
 2. Refuse unless `HMAC-SHA256(K, x ‖ suffix) = y`; evaluate the circuit in the
    clear (§7.3) to get `w` and refuse if any ASSERT fails.
 3. `μ`, `ρ = rng(32)`, `(r, iv_pre)`, `iv` (§8).
-4. VOLE commitment: roots, 16 trees (§4.2), leaf expansions (§5.1),
+4. VOLE commitment: roots, `τ` trees (§4.2), leaf expansions (§5.1),
    `u_i, v_{i,b}` (§5.2), `u = u_0`, `c_i = u_0 ⊕ u_i`, columns `V`, `hcom`.
 5. `chall1`; `ũ = VH(u)`; `h_V` over `VH(V_j)`; `d = w ⊕ u[0..ℓ)`; `chall2`.
 6. Rows `v[r]` for `r < ℓ + 128`; terms `A0_t, A1_t` (§6.2); `u*`, `v*`;
    `ã = ZKH(A1; u*)`, `b̃ = ZKH(A0; v*)`; `chall3`.
-7. `Δ = chall3`; for each tree, `open_i` at `j* = chall3[i]` (§4.3).
+7. `Δ = chall3`; for each tree, `open_i` at `j* = δ_i` (§4.3, §5.3).
 8. Output the proof of §10.
 
 The prover's secrets are `x`, `w`, `r`, all seeds, `u`, `V` and `ρ`.
@@ -620,25 +643,28 @@ Fields in order (statement 0x01 offsets in bytes):
 
 | offset | field | bytes | notes |
 |---|---|---|---|
-| 0 | version | 1 | `0x01` |
+| 0 | version | 1 | `0x02` |
 | 1 | statement id | 1 | `0x01` |
 | 2 | `iv_pre` | 16 | |
-| 18 | `enc(c_1) … enc(c_15)` | 15 × 5,307 | `⌈ℓ̂/8⌉` each; 1 padding bit each |
-| 79,623 | `ũ` | 32 | |
-| 79,655 | `enc(d)` | 5,259 | `⌈ℓ/8⌉`; 1 padding bit |
-| 84,914 | `ã` | 16 | |
-| 84,930 | `open_0 … open_15` | 16 × 160 | 8 co-path seeds top-down, then `com_{i,j*}` |
-| 87,490 | `chall3` | 16 | |
-| | **total** | **87,506** | |
+| 18 | `enc(c_1) … enc(c_23)` | 23 × 5,307 | `⌈ℓ̂/8⌉` each; 1 padding bit each |
+| 122,079 | `ũ` | 32 | |
+| 122,111 | `enc(d)` | 5,259 | `⌈ℓ/8⌉`; 1 padding bit |
+| 127,370 | `ã` | 16 | |
+| 127,386 | `open_0 … open_23` | 8 × 128 + 16 × 112 | co-path seeds top-down (6 for trees 0–7, 5 after), then `com_{i,j*}` |
+| 130,202 | `chall3` | 16 | |
+| | **total** | **130,218** | |
 
 General size formula (bytes):
 
 ```
-|π| = 2 + λ/8 + (τ−1)·⌈(ℓ+3λ)/8⌉ + 2λ/8 + ⌈ℓ/8⌉ + λ/8 + τ·(k·λ/8 + 2λ/8) + λ/8
-    = 2,642 + 15·⌈(ℓ+384)/8⌉ + ⌈ℓ/8⌉            (λ = 128, τ = 16, k = 8)
+|π| = 2 + λ/8 + (τ−1)·⌈(ℓ+3λ)/8⌉ + 2λ/8 + ⌈ℓ/8⌉ + λ/8 + Σ_i (k_i·λ/8 + 2λ/8) + λ/8
+    = 2 + λ/8 + (τ−1)·⌈(ℓ+3λ)/8⌉ + 2λ/8 + ⌈ℓ/8⌉ + λ/8 + λ²/8 + τ·2λ/8 + λ/8
+    = 2,130 + (τ−1)·⌈(ℓ+384)/8⌉ + ⌈ℓ/8⌉ + 32τ          (λ = 128; Σ_i k_i = λ)
 ```
 
-For statement 0x01 (`ℓ = 42,071`): `2,642 + 15·5,307 + 5,259 = 87,506` bytes. Every
+The openings take `Σ_i (16·k_i + 32) = 2,048 + 32τ` bytes whatever the depths. For
+statement 0x01 (`ℓ = 42,071`): `|π| = 2,082 + 5,339·τ`, i.e. `2,082 + 5,339·24 = 130,218`
+bytes for `τ = 24` (v0.1, `τ = 16`: 87,506). Every
 valid proof for a statement id has exactly this length; there is no other
 encoding of the same proof.
 
@@ -650,17 +676,17 @@ encoding of the same proof.
 `verify(statement, m, π) → bool`. Return false at the first failed check.
 **Steps 1–5 happen before any hashing or parsing of proof contents.**
 
-1. The statement id is a registered id (only `0x01` in v0.1); otherwise false.
+1. The statement id is a registered id (only `0x01` in v0.2); otherwise false.
 2. The public inputs parse canonically (§7.5): first byte `L ∈ [1, 64]`, total
    length exactly `L + 34`, `K` bytes in `0x20..0x7E`.
 3. `m` is a byte string of length ≤ 65,535.
-4. `π` is a byte string of length exactly `|π|` for this statement id (87,506).
-5. `π[0] = 0x01` and `π[1] =` the statement id.
+4. `π` is a byte string of length exactly `|π|` for this statement id (130,218).
+5. `π[0] = 0x02` and `π[1] =` the statement id.
 6. Split `π` at the fixed offsets of §10. Decode each `enc(c_i)` and `enc(d)`;
    reject if any padding bit is non-zero. Steps 8–9 hash these bytes as
    received.
 7. Compute `μ`, `iv`, `Δ = chall3`.
-8. For each tree `i`: `j* = chall3[i]`; reconstruct (§4.4) to get `h_i` and the
+8. For each tree `i`: `j* = δ_i` (§5.3); reconstruct (§4.4) to get `h_i` and the
    seeds `sd_{i,j}`, `j ≠ j*`; expand them (§5.1); compute `q_{i,b}` (§5.2); form
    `Q` with the corrections (§5.3). Compute `hcom` and `chall1`.
 9. `h_V` from `VH(Q_j) ⊕ Δ_j·ũ` (§5.4); `chall2`.
@@ -670,7 +696,7 @@ encoding of the same proof.
 11. Recompute `chall3' = SHAKE256[ch3](chall2 ‖ ã ‖ enc(b̃), 16)` and return
     `chall3' == chall3`.
 
-`vectors/statement1-v0.1.json` holds 4 valid vectors and 44 negative vectors
+`vectors/statement1-v0.2.json` holds 4 valid vectors and 52 negative vectors
 (edits of a valid proof, statement or message: every header byte, every padding
 bit, each proof section, length ±1, wrong `m`, `y`, `K`, `suffix` and statement
 id) that every conforming verifier must reject.
@@ -687,7 +713,7 @@ This section restates the interface of `m4-design-2026-10-14.md` §11; the
 consensus details belong to the M4-R design.
 
 - The proof is carried in the annex as one element, at most one proof per
-  input (4R-3, 4R-9). Statement 0x01 proofs are 87,506 bytes (87,506 WU).
+  input (4R-3, 4R-9). Statement 0x01 proofs are 130,218 bytes (130,218 WU).
 - `m = rescue sighash ‖ network id ‖ public key` (or the public-key
   commitment of 4R-6); this specification treats `m` as opaque bytes. The rescue sighash
   (`key_version = 0x03`) omits `sha_annex`, so the proof never commits to
@@ -725,7 +751,7 @@ queries to `leaf`, `Q_1` to `tree`/`hcom`/`hv` and `Q_{2,j}` to `ch_j`:
 
 ```
 Adv_EUF-KO ≤ 3·(Q_leaf + Q_1 + Q_2)^2 / 2^256          (collisions/preimages of 256-bit outputs)
-           + Q_{2,1} · C(τ,2) · ε_v                     (VOLE consistency, ≤ 2^−232.3 per query)
+           + Q_{2,1} · C(τ,2) · ε_v                     (VOLE consistency, ≤ 2^−231.1 per query)
            + Q_{2,2} · ε_zk                             (ZKHash, ≈ 2^−128 per query)
            + Q_{2,3} · 2^{1−λ}                           (QuickSilver final check, 2^−127 per query)
            + Adv_OWF
@@ -736,8 +762,24 @@ Adv_EUF-KO ≤ 3·(Q_leaf + Q_1 + Q_2)^2 / 2^256          (collisions/preimages 
   `Q_2·(ε_v + ε_zk + 2^−λ)`. Its terms are re-derived here, conservatively, for
   our hash families.
 - The `C(τ,2)·ε_v` term is FAEST's Claim 1 (from BBD+23 Theorem 2, SoftSpokenVOLE
-  with the repetition code over the τ trees). Our `ε_v ≤ (330/2^128)^2` makes it
-  negligible; FAEST v1.1 needed `B = 16` extra hash bits for the same factor.
+  with the repetition code over the τ trees). With `τ = 24`, `C(τ,2) = 276`
+  (v0.1: 120), and `ε_v ≤ (330/2^128)^2` keeps the term at `2^−231.1` per query
+  (v0.1: `2^−232.3`); FAEST v1.1 needed `B = 16` extra hash bits for the same factor.
+- **What else depends on τ or the depths** (re-checked for v0.2):
+  - The final-check term `2^{1−λ}`, the challenge space and brute force on `Δ`
+    (§13.6) depend on `Σ_i k_i = λ = 128` only, which mixed depths keep.
+  - A cheating prover can send inconsistent corrections for a set `S` of trees
+    and hope the challenge hides them; that needs the `Σ_{i∈S} k_i` bits of `Δ`
+    of those trees, and the other bits still bind the final check, so the total
+    stays at the `2^{1−λ}` level. Smaller trees make one tree's bits easier to
+    guess (`2^−5` instead of `2^−8`) without changing the total. This is the
+    SoftSpokenVOLE argument behind FAEST v1.1 Theorem 1, whose parameter sets
+    already mix depths (FAEST-128s: depths 12 and 11); a reviewer should
+    confirm it for depths 6 and 5.
+  - The leaf-commitment and extraction terms count random-oracle queries, not
+    leaves; a tree has fewer leaves (`N_i ≤ 64`) but every leaf is still bound
+    by a 256-bit commitment.
+  - Zero knowledge (§13.3) needs one hidden leaf per tree, unchanged.
 - EUF-CMA follows FAEST v1.1 Theorem 2: signing queries are simulated by
   programming `ch1`, `ch2`, `ch3`; the added terms are PRG/PRF advantages of the
   tagged SHAKE256 calls and programming collisions bounded by the min-entropy of
@@ -809,12 +851,12 @@ FAEST v3.0's classical proof takes the same key-switching route, which is why
 2. The Python reference is not constant time and keeps secrets in ordinary
    memory. It is for specification and testing, not for proving with real
    seeds on shared machines. A production prover must be constant time.
-3. Verification cost is dominated by ~21.7 MB of SHAKE256 output (§3.3): the
-   leaf expansions alone take 38.7 ms with OpenSSL's SHAKE256 on the test
-   machine (NOTES.md). The Rust verifier takes about 113 ms single-threaded on
-   a Zen 2 server (median; NOTES.md, "Rust verifier"), against R1's estimate
-   of 6–22 ms with AES-NI; at that speed the proof does not pay for its own
-   validation weight (NOTES.md).
+3. Verification cost is dominated by ~5.3 MB of SHAKE256 output (§3.3). The
+   Rust verifier takes 34–38 ms single-threaded on a Zen 2 server (median;
+   NOTES.md, "v0.2 tree split"), against R1's estimate of 6–22 ms with AES-NI.
+   With 24 trees the proof pays for its validation weight with a margin of at
+   least 1.6 in every measured run; with v0.1's 16 trees (about 113 ms) it did
+   not.
 4. One parameter set; no BAVC, `T_open` or grinding (FAEST v2/v3 savings of a
    few hundred bytes deferred).
 5. Degree-2 QuickSilver only; statement 2 (HKDF-SHA-512) needs the degree-≤6
@@ -841,6 +883,7 @@ From FAEST v1.1 [F11] (the skeleton) and FAEST v3.0 [F30] (the hardening):
 | D9 | `rnd` input `x ‖ μ ‖ ρ` with 32-byte `ρ` | `sk ‖ μ ‖ ρ`, λ-bit `ρ` | witness is the HMAC seed |
 | D10 | Proof header (version, statement id); bit strings with checked zero padding; field order with `iv_pre` first | no header; all lengths multiples of 8; `iv` last | canonical encoding for consensus |
 | D11 | Tree commitment hash includes `iv` and the tree index | `H_1(com_0..com_{N−1})` | uniform tweak convention; harmless |
+| D12 | `τ = 24` trees, `k0`/`k1` split as in FAEST (8 trees of depth 6, then 16 of depth 5) | FAEST-128f: `τ = 16`, `k = 8`; FAEST-128s: `τ = 11`, depths 12 and 11 | more, smaller trees than any FAEST set: fewer leaf expansions for a faster verifier, at the cost of proof size |
 
 From R1 (`R1-voleith-plan.md`):
 
@@ -850,11 +893,12 @@ From R1 (`R1-voleith-plan.md`):
 | R-b | VOLEHash and ZKHash variants D3, D4 | R1 kept v1.1's hashes and flagged the `ℓ̂ ≤ 2^13` bound as unchecked; these variants make the bound immediate |
 | R-c | `K` is a public input (1–64 printable ASCII bytes), not fixed per statement id | task definition of statement 1 |
 | R-d | Free additions for the last four outer rounds and constant/public folding (§7.4): `ℓ = 42,071` instead of the estimated 43,036; proof 87,506 B instead of 89.2 kB | R1 §3.3 suggested public-output folding |
-| R-e | No `param_id` field: the version byte fixes the parameters | one parameter set in v0.1 |
+| R-e | No `param_id` field: the version byte fixes the parameters | one parameter set per version |
+| R-f | v0.2: `τ = 24` mixed-depth trees (8 trees of depth 6, then 16 of depth 5) instead of R1's `τ = 16`, `k = 8` | verification cost: 1,000 instead of 4,080 leaf expansions; the proof grows from 87,506 to 130,218 bytes and still pays for its validation weight (NOTES.md) |
 
 ## 16. Versioning
 
-- The version byte (`0x01`) and the label `v0.1` in every tag identify this
+- The version byte (`0x02`) and the label `v0.2` in every tag identify this
   specification. Any change to a primitive, tag, transcript field, parameter,
   hash family, proof layout or the circuit-building rules of §7 requires a new
   version byte and label.
@@ -862,8 +906,14 @@ From R1 (`R1-voleith-plan.md`):
   (empty-suffix HMAC, ML-DSA) and `0x03`/`0x04` (statement 2) are reserved per
   the R spike numbering. A statement's definition includes its circuit digest
   (§7.6) and proof length.
-- v0.1 is a review draft. After review, a frozen version is published with
-  new vectors; v0.1 vectors stay as historical test data.
+- History: v0.1 (`0x01`, 2026-10-14) used `τ = 16` trees of depth 8 and was never
+  deployed; v0.2 (`0x02`) changes only the tree split, hence the version byte,
+  the tag label, the roots, the openings, the challenge decoding and the proof
+  length. v0.1's vectors are in git history only.
+- The circuit layer (§7) is unchanged; its serialization label (§7.6) names the
+  circuit layer's own version and stays "circuit v0.1", so the digests are the same.
+- v0.2 is a review draft. After review, a frozen version is published with new
+  vectors.
 
 ## 17. References
 
