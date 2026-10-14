@@ -247,7 +247,9 @@ Keys: `s = chall1[0..16)`, `t = chall1[16..32)` as field elements.
 
 For a bit string `x` of length `ℓ̂`, let `x0 = x[0..ℓ+128)` and
 `x1 = x[ℓ+128..ℓ̂)` (256 bits). Zero-pad `x0` to `n_v = ⌈(ℓ+128)/128⌉` blocks of 128
-bits, `y_0 .. y_{n_v−1}` (block `j` = bits `[128j, 128j+128)`), and define
+bits, `y_0 .. y_{n_v−1}` (block `j` = bits `[128j, 128j+128)` of the padded `x0`;
+the last block holds the final `ℓ+128 − 128(n_v−1)` bits of `x0` and zeros, never
+bits of `x1`), and define
 
 ```
 P_s(x0) = Σ_{j<n_v} y_j · s^(n_v − j)        (Horner: h = 0; for each j: h = (h ⊕ y_j)·s)
@@ -809,9 +811,10 @@ FAEST v3.0's classical proof takes the same key-switching route, which is why
    seeds on shared machines. A production prover must be constant time.
 3. Verification cost is dominated by ~21.7 MB of SHAKE256 output (§3.3): the
    leaf expansions alone take 38.7 ms with OpenSSL's SHAKE256 on the test
-   machine (NOTES.md). A Rust verifier is estimated at 45–80 ms single-threaded
-   (not measured), against R1's 6–22 ms with AES-NI; this affects the
-   validation weight.
+   machine (NOTES.md). The Rust verifier takes about 113 ms single-threaded on
+   a Zen 2 server (median; NOTES.md, "Rust verifier"), against R1's estimate
+   of 6–22 ms with AES-NI; at that speed the proof does not pay for its own
+   validation weight (NOTES.md).
 4. One parameter set; no BAVC, `T_open` or grinding (FAEST v2/v3 savings of a
    few hundred bytes deferred).
 5. Degree-2 QuickSilver only; statement 2 (HKDF-SHA-512) needs the degree-≤6
