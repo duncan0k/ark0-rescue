@@ -11,7 +11,7 @@ from voleith.params import TAU, K, LAMBDA, MAX_MESSAGE_LEN
 from voleith.vc import OPENING_BYTES
 
 WALLET_KEY = b"ark0-wallet v1 schnorr"
-PROOF_LEN = 87506  # SPEC.md §8.2
+PROOF_LEN = 87506  # SPEC.md §10
 
 
 def seeded_rng(seed):
@@ -198,6 +198,43 @@ class TestProofEndToEnd(unittest.TestCase):
             voleith.prove(self.stmt, self.x[:31], self.msg)
         with self.assertRaises(ValueError):
             voleith.prove(voleith.Statement(9, b""), self.x, self.msg)
+
+    def test_prover_rejects_non_int_statement_id(self):
+        pub = self.stmt.public_inputs
+        for sid in (True, 1.0, [1], None):
+            with self.assertRaises(ValueError):
+                voleith.prove(voleith.Statement(sid, pub), self.x, self.msg)
+
+    def test_vole_consistency_check_is_load_bearing(self):
+        """Wrong corrections c_i on rows QuickSilver never reads are caught by
+        the VOLE consistency check alone (SPEC §5.4)."""
+        lay = self.lay
+        hash_mask_row = lay.ell + 128 + 5
+
+        def run(tamper, seed):
+            proof, _ = P._prove_impl(self.stmt, self.x, self.msg, seeded_rng(seed),
+                                     enforce_relation=False, tamper_corrections=tamper)
+            self.assertEqual(len(proof), PROOF_LEN)
+            return proof
+
+        # Control: the hook itself changes nothing.
+        self.assertTrue(voleith.verify(self.stmt, self.msg, run(lambda cs, _: cs, b"t0")))
+
+        # All of c_1..c_15 wrong: rejected unless every delta_i is 0 (2^-120).
+        for row in (hash_mask_row, lay.ell + 3, 7):
+            def tamper_all(cs, _, row=row):
+                return [c ^ (1 << row) for c in cs]
+            self.assertRejects(self.stmt, self.msg, run(tamper_all, b"t1"), row)
+
+        # Only c_4 wrong: undetectable exactly when delta_4 = 0 (the prover
+        # "guessed" tree 4's challenge), rejected otherwise.
+        def tamper_one(cs, _):
+            cs[3] ^= 1 << hash_mask_row
+            return cs
+        for seed in (b"t2", b"t3", b"t4"):
+            proof = run(tamper_one, seed)
+            delta_4 = proof[lay.off_chall3 + 4]
+            self.assertIs(voleith.verify(self.stmt, self.msg, proof), delta_4 == 0, seed)
 
     def test_cheating_prover_with_wrong_seed(self):
         proof, _ = P._prove_impl(self.stmt, flip(self.x, 0), self.msg, seeded_rng(b"c1"),

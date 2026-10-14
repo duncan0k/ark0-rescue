@@ -1,4 +1,4 @@
-"""VOLEitH prover and verifier (SPEC.md §6, §8, §9).
+"""VOLEitH prover and verifier (SPEC.md §6, §8-§11).
 
 prove(statement, witness, message, rng) -> proof bytes
 verify(statement, message, proof) -> bool
@@ -16,7 +16,7 @@ from .unihash import VoleHash, ZkHash
 
 
 class Layout:
-    """Field sizes and offsets of a proof for one statement id (SPEC.md §8)."""
+    """Field sizes and offsets of a proof for one statement id (SPEC.md §10)."""
 
     def __init__(self, circuit):
         self.ell = circuit.n_witness
@@ -83,10 +83,12 @@ def prove(statement, witness, message, rng=None):
 
 
 def _prove_impl(statement, witness, message, rng, enforce_relation, trace=False,
-                witness_bits_override=None):
-    """Prover core. `enforce_relation=False` and `witness_bits_override` exist
-    only so tests can play a cheating prover; prove() never uses them."""
-    if not isinstance(statement, Statement) or statement.statement_id not in REGISTRY:
+                witness_bits_override=None, tamper_corrections=None):
+    """Prover core. `enforce_relation=False`, `witness_bits_override` and
+    `tamper_corrections` exist only so tests can play a cheating prover;
+    prove() never uses them."""
+    if (not isinstance(statement, Statement) or type(statement.statement_id) is not int
+            or statement.statement_id not in REGISTRY):
         raise ValueError("unknown statement")
     sdef = REGISTRY[statement.statement_id]
     parsed = sdef.parse_public(statement.public_inputs)
@@ -120,6 +122,10 @@ def _prove_impl(statement, witness, message, rng, enforce_relation, trace=False,
     r, iv_pre = rnd[:LAMBDA_BYTES], rnd[LAMBDA_BYTES:]
     iv = xof("iv", iv_pre + mu, LAMBDA_BYTES)
     hcom, decom, corrections, u, v_cols = vole.commit(r, iv, lhat)
+    if tamper_corrections is not None:
+        if enforce_relation:
+            raise ValueError("tampering is for cheating-prover tests only")
+        corrections = tamper_corrections(list(corrections), lay)
     c_enc = [bits.encode(c, lhat) for c in corrections]
     chall1 = xof_parts("ch1", [mu, hcom] + c_enc + [iv_pre], 2 * LAMBDA_BYTES)
 
@@ -155,7 +161,10 @@ def _prove_impl(statement, witness, message, rng, enforce_relation, trace=False,
         raise AssertionError("internal error: proof length")
     info = None
     if trace:
-        info = {"mu": mu, "rho": rho, "iv_pre": iv_pre, "iv": iv, "hcom": hcom,
+        tree_hashes = [vc.tree_hash(iv, i, decom[i][1]) for i in range(TAU)]
+        info = {"mu": mu, "rho": rho, "r": r, "iv_pre": iv_pre, "iv": iv,
+                "roots": b"".join(vole.tree_roots(r, iv)),
+                "tree_hashes": b"".join(tree_hashes), "hcom": hcom,
                 "chall1": chall1, "u_tilde": u_tilde, "h_v": h_v,
                 "chall2": chall2, "a_tilde": a_tilde, "b_tilde": b_tilde,
                 "chall3": chall3}
@@ -168,7 +177,9 @@ def verify(statement, message, proof):
     """True iff `proof` is a valid proof for `statement` bound to `message`.
 
     Every length and format check happens before any hashing; any malformed
-    input yields False.
+    input yields False. No input is known to make this function raise; an
+    exception would be a bug, and callers must treat it as rejection (a
+    consensus implementation maps every internal error to False).
     """
     # 1. Statement: known id, canonical public inputs.
     if not isinstance(statement, Statement):

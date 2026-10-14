@@ -1,4 +1,4 @@
-"""SHA-256 compression as a Boolean circuit (SPEC.md §7.3-§7.4).
+"""SHA-256 compression as a Boolean circuit (SPEC.md §7.4).
 
 A word is a list of 32 wire ids, least significant bit first (index i has
 weight 2^i). Constant words use the constant wires 0 and 1. All word gadgets

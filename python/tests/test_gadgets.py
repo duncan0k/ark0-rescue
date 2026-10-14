@@ -47,17 +47,20 @@ class TestAdder(unittest.TestCase):
                         self.assertTrue(circ.check_witness([], wit))
 
     def test_secret_plus_public(self):
-        n = 6
-        b = Builder(n, n)
-        out = g.add_w(b, b.public, b.secret)
-        b.outputs = out
-        circ = b.build()
-        self.assertEqual(circ.n_mul, n - 2)
-        for x in range(1 << n):
-            for y in range(1 << n):
-                vals, _, ok = circ.evaluate(to_bits(x, n), to_bits(y, n))
-                self.assertTrue(ok)
-                self.assertEqual(from_bits(circ.output_bits(vals)), (x + y) % (1 << n))
+        for n in (2, 4, 6):
+            b = Builder(n, n)
+            out = g.add_w(b, b.public, b.secret)
+            b.outputs = out
+            circ = b.build()
+            self.assertEqual(circ.n_mul, n - 2)
+            for x in range(1 << n):
+                for y in range(1 << n):
+                    pb, sb = to_bits(x, n), to_bits(y, n)
+                    vals, _, ok = circ.evaluate(pb, sb)
+                    self.assertTrue(ok)
+                    self.assertEqual(from_bits(circ.output_bits(vals)), (x + y) % (1 << n))
+                    if n <= 4:
+                        self.assertEqual(all_witness_extensions(circ, pb, sb), 1)
 
     def test_secret_plus_constant(self):
         n = 8
@@ -83,6 +86,19 @@ class TestAdder(unittest.TestCase):
                 for y in range(1 << n):
                     for z in range(1 << n):
                         _, _, ok = circ.evaluate(to_bits(z, n), to_bits(x, n) + to_bits(y, n))
+                        self.assertEqual(ok, (x + y) % (1 << n) == z, (n, x, y, z))
+
+    def test_assert_add_secret_public(self):
+        # x secret, y and z public.
+        for n in (1, 3, 4):
+            b = Builder(2 * n, n)
+            g.assert_add(b, b.secret, b.public[:n], b.public[n:])
+            circ = b.build()
+            self.assertEqual(circ.n_mul, 0)
+            for x in range(1 << n):
+                for y in range(1 << n):
+                    for z in range(1 << n):
+                        _, _, ok = circ.evaluate(to_bits(y, n) + to_bits(z, n), to_bits(x, n))
                         self.assertEqual(ok, (x + y) % (1 << n) == z, (n, x, y, z))
 
     def test_add_multi_order_and_zero_dropping(self):

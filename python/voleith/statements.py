@@ -1,4 +1,4 @@
-"""Statement registry (SPEC.md §6-§7).
+"""Statement registry (SPEC.md §7.5).
 
 Statement 0x01 (web wallet v1, Schnorr derivation):
     public:  K (1..64 printable ASCII bytes), suffix (1 byte), y (32 bytes)

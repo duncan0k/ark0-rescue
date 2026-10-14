@@ -29,7 +29,7 @@ def _leaf(seed, iv, tree, j):
     return out[:SEED], out[SEED:]
 
 
-def _tree_hash(iv, tree, coms):
+def tree_hash(iv, tree, coms):
     return xof("tree", iv + u8(tree) + b"".join(coms), COM)
 
 
@@ -50,7 +50,7 @@ def commit(root, iv, tree):
         sd, com = _leaf(nodes[N_LEAVES + j], iv, tree, j)
         sds.append(sd)
         coms.append(com)
-    return _tree_hash(iv, tree, coms), nodes, sds, coms
+    return tree_hash(iv, tree, coms), nodes, sds, coms
 
 
 def open_(nodes, coms, jstar):
@@ -78,4 +78,4 @@ def reconstruct(opening, iv, tree, jstar):
             sd, com = _leaf(nodes[N_LEAVES + j], iv, tree, j)
             sds.append(sd)
             coms.append(com)
-    return _tree_hash(iv, tree, coms), sds
+    return tree_hash(iv, tree, coms), sds

@@ -1,4 +1,4 @@
-"""Print gate counts, witness size and proof size (SPEC.md §7.5, §8.2).
+"""Print gate counts, witness size and proof size (SPEC.md §7.5, §10).
 
 Usage: python -I python/tools/circuit_stats.py
 """
