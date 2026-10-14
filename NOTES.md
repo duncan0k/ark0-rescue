@@ -1,9 +1,11 @@
-# Notes on v0.1 (2026-10-14)
+# Notes on v0.2 (2026-10-14)
 
 Companion to `SPEC.md`: measurements, what is missing, and questions for
-reviewers.
+reviewers. v0.2 replaced v0.1 on the same day: 24 GGM trees of mixed depth
+instead of 16 trees of depth 8 (section "v0.2 tree split"). Sections and
+numbers marked "v0.1, superseded" are kept for the record only.
 
-## Measurements
+## Python measurements (v0.1, superseded)
 
 Machine: Windows 11, AMD Family 25 Model 116 (Zen 4 laptop), Python 3.12.9,
 one thread. Commands are at the end.
@@ -30,7 +32,7 @@ one thread. Commands are at the end.
     provisional 50,000 may not be enough. See Q5.
   - Measured since: about 113 ms, see "Rust verifier" below.
 
-## Internal review
+## Internal review (of v0.1)
 
 An AI reviewer (not an external cryptographer) re-implemented the circuit
 builder, the prover and the verifier from SPEC.md alone. Its builder reproduced
@@ -54,11 +56,11 @@ The rest were wording, notation and stale section references.
 | Statement 0x01: AND of two secret wires | 41,815 |
 | Statement 0x01: ASSERT (final-state checks) | 256 |
 | Witness bits ℓ / constraints C | 42,071 / 42,071 (R1 estimate: 43,036) |
-| Proof | **87,506 bytes** (R1 estimate: 89.2 kB) |
+| Proof | **130,218 bytes** with 24 trees (v0.1, 16 trees: 87,506; R1 estimate: 89.2 kB) |
 
-Of the 87,506 bytes, the 15 correction vectors take 79,605 (91%), `d` 5,259,
-the tree openings 2,560 and the rest 82. Each witness bit costs 2 bytes
-(τ = 16 bits).
+Of the 130,218 bytes, the 23 correction vectors take 122,061 (94%), `d` 5,259,
+the tree openings 2,816 and the rest 82. Each witness bit costs 3 bytes
+(τ = 24 bits; v0.1: 2 bytes).
 
 The savings against R1's estimate come from folding constants and public
 values (Ch and Maj with public inputs, the bit-0 carry of public addends) and
@@ -67,7 +69,11 @@ from the last four rounds of the outer compression, whose outputs are public
 
 ## Rust verifier
 
-Added 2026-10-14. `rust/` is a Cargo crate (library `voleith`, built as rlib
+Added 2026-10-14 for v0.1; the crate now implements v0.2 (section "v0.2 tree
+split"). The design notes below still hold; the tests, benchmarks and the
+validation-weight discussion in this section are v0.1's and superseded.
+
+`rust/` is a Cargo crate (library `voleith`, built as rlib
 and staticlib) with the verifier, a prover and the C function
 `voleith_verify_s1` (header `rust/include/voleith.h`). It was written from
 SPEC.md with the Python package open for structure, so it checks the Python
@@ -85,8 +91,8 @@ code less independently than the internal review's re-implementation did.
   constant time and does not zeroize; it is for tests and tools.
 - **Unsafe code.** The crate root has `#![deny(unsafe_code)]` and every module
   `#![forbid(unsafe_code)]`, except `src/ffi.rs`. That shim checks every length
-  first (`k_len` 1–64, `msg_len` ≤ 65,535, `proof_len` = 87,506, `y` not
-  null; a null pointer only with length 0), then makes slices, and runs the
+  first (`k_len` 1–64, `msg_len` ≤ 65,535, `proof_len` = the proof length,
+  130,218 in v0.2, `y` not null; a null pointer only with length 0), then makes slices, and runs the
   verifier under `catch_unwind` (release builds keep `panic = "unwind"`).
 - **Portable arithmetic.** GF(2^128) products use a 4-bit-window carry-less
   multiply and 64 KiB tables for fixed multipliers; no CLMUL or AES
@@ -102,7 +108,7 @@ code less independently than the internal review's re-implementation did.
   `-O3` without the x86-64 assembly, `ECMULT_WINDOW_SIZE` 15). `Cargo.lock`
   holds `cc` at 1.4.7 because 1.8.0 was three days old.
 
-### Tests
+### Tests (v0.1, superseded)
 
 `cargo test`: 25 tests, all passing, in the generic and the x86-64-v3 build.
 
@@ -136,7 +142,7 @@ code less independently than the internal review's re-implementation did.
   exports Rust standard-library symbols (2,214 global text symbols), so a
   binary should link only one Rust staticlib.
 
-### Benchmarks
+### Benchmarks (v0.1, superseded)
 
 Machine: one pod on a shared single-node k3s host. AMD EPYC-Rome (Zen 2,
 family 23 model 49), KVM guest with 12 vCPUs, TSC 1,996 MHz, 512 KB L2;
@@ -182,7 +188,7 @@ gave verify medians of 94.8 and 91.0 ms, p99 158.5 and 112.8 ms, Schnorr
 40.34 and 40.71 µs, and C = 245,521 and 173,184. The gain comes from Keccak
 (SHAKE256 305–309 MB/s, likely from BMI1 `andn`).
 
-### Does the proof pay for its verification?
+### Does the proof pay for its verification? (v0.1, superseded)
 
 No. The self-funded budget is the proof (87,506) plus the other witness bytes
 plus 50, about 87,600. The measured C is 216,000–279,000, i.e. 2.5–3.2 times
@@ -222,6 +228,9 @@ for λ = 128, k-split as in FAEST's mixed-depth trees.
   it would be.
 - Also possible outside SPEC.md: a consensus rule that charges rescue inputs
   extra weight or caps them per block (M4-R design).
+
+Outcome: v0.2 takes the first option, with `τ` chosen by measurement instead
+of by this model (section "v0.2 tree split").
 
 ### Spec
 
@@ -312,12 +321,86 @@ then `kubectl cp`):
 ```
 # in the pod, in /work/rust
 cargo test --locked
-cargo bench --locked --bench verify -- [verify runs, default 300] [Schnorr runs, default 20000]
-RUSTFLAGS="-C target-cpu=x86-64-v3" CARGO_TARGET_DIR=target-v3 cargo bench --locked --bench verify
+cargo bench --locked --features bench-splits --bench verify -- --taus 22,24 --runs 1000 --schnorr 20000
+RUSTFLAGS="-C target-cpu=x86-64-v3" CARGO_TARGET_DIR=target-v3 cargo bench --locked --features bench-splits --bench verify
 # afterwards: delete the pod by name, then the namespace
 kubectl -n rescue-build delete pod rust-build
 kubectl delete namespace rescue-build
 ```
+
+The v0.1 benchmark above (`cargo bench --bench verify -- [verify runs]
+[Schnorr runs]`) is the version at commit 962aeee.
+
+## v0.2 tree split
+
+**Decision rule** (coordinator, 2026-10-14): measure the candidate splits with
+the v0.1 procedure, then pick the smallest `τ` whose measured
+`C = 1.25 × 50 × p99(verify) / median(Schnorr)` is at most `budget / 1.5` in
+every run, where `budget = proof bytes + 50`. Candidates: FAEST's split for
+`τ = 22` (18 trees of depth 6, 4 of depth 5) and `τ = 24` (8 of depth 6, 16 of
+depth 5); `τ = 26` or 32 only if neither qualifies.
+
+**Implementation.** Python and Rust both take a `TreeSplit` (SPEC.md §2, §5.3).
+`verify()`, `prove()` and `voleith_verify_s1` use only the frozen split. The
+benchmark reaches other splits through `voleith::bench`, which exists only with
+the cargo feature `bench-splits`; in Python, through the private
+`_prove_impl(..., split=)` and `_verify_impl(..., split)`. The two
+implementations produce the same proof for each candidate from the
+benchmark's inputs (SHA-256 `fa208810…` for `τ = 22`, `66095300…` for
+`τ = 24`, printed by every run), and each verifies it.
+
+**Procedure.** The v0.1 pod spec and image (section "Rust verifier",
+"Reproduce"), generic x86-64 release build, one thread. Per run: one proof per
+split from the crate's prover; 1,000 verifications per split, the splits
+interleaved; 20,000 libsecp256k1 BIP-340 verifications in the same binary, in
+four blocks between the verifications; then 100 rejections per split of each
+of two proofs that fail only at the final comparison. Three runs; none
+overlapped minutes x4 or x5. Another workload's cross-compilation had loaded
+the host (load average up to 29) until about 17:30; the runs started after it
+had dropped to one core, at load averages of 1.3–2.7.
+
+| Run (UTC) | τ | Proof bytes | Verify median | Verify p99 | Schnorr median | C | Budget | Margin (budget / C) | C ≤ budget / 1.5 |
+|---|---|---|---|---|---|---|---|---|---|
+| 17:30 | 22 | 119,540 | 41.06 ms | 57.81 ms | 41.58 µs | 86,898 | 119,590 | 1.38 | no |
+| 17:30 | 24 | 130,218 | 33.92 ms | 50.24 ms | 41.58 µs | 75,524 | 130,268 | 1.72 | yes |
+| 17:36 | 22 | 119,540 | 42.02 ms | 61.36 ms | 42.96 µs | 89,264 | 119,590 | 1.34 | no |
+| 17:36 | 24 | 130,218 | 34.57 ms | 51.56 ms | 42.96 µs | 75,015 | 130,268 | 1.74 | yes |
+| 17:38 | 22 | 119,540 | 48.41 ms | 63.49 ms | 44.38 µs | 89,397 | 119,590 | 1.34 | no |
+| 17:38 | 24 | 130,218 | 37.89 ms | 57.36 ms | 44.38 µs | 80,765 | 130,268 | 1.61 | yes |
+
+- `budget / 1.5` is 79,727 for `τ = 22` and 86,845 for `τ = 24`.
+- Rejections at the final comparison cost the same as valid proofs: medians
+  33.9–37.5 ms and p99 50.2–54.7 ms for `τ = 24` (43.9–46.3 and 59.8–60.6 ms for
+  `τ = 22`).
+- Proving with the Rust prover: 36–44 ms for `τ = 24`, 49–54 ms for `τ = 22`.
+  SHAKE256 ran at 221–242 MB/s, as in the v0.1 runs.
+- Against v0.1 (about 113 ms), verification is about three times faster: the
+  verifier expands 1,000 leaves instead of 4,080 (5.3 MB of SHAKE256 output
+  instead of 21.7 MB).
+
+**Choice.** `τ = 22` misses the rule in all three runs (margins 1.34–1.38);
+`τ = 24` meets it in all three (1.61–1.74), so `τ = 24` is the smallest
+qualifying split, and `τ = 26` and 32 were not measured. It is frozen as the
+only parameter set of SPEC v0.2: 8 trees of depth 6 and 16 of depth 5,
+version byte `0x02`, proofs of 130,218 bytes.
+
+**Tests for v0.2.**
+
+- `vectors/statement1-v0.2.json`: the 4 fixed-rng vectors with their
+  intermediates and 52 negative vectors (one per padding bit of the 23
+  corrections and of `d`, the rest as in v0.1).
+- `vectors/statement1-v0.2-differential.json` (19.5 MB, master seed
+  "voleith differential set v0.2 / 2026-10-14"): 100 valid cases and 440
+  mutated ones (166 section flips, 8 header bytes, 24 padding bits, 40 byte
+  XORs, 20 double flips, 7 zeroed sections, 16 truncations, 7 extensions,
+  20 wrong messages, 22 wrong statements, 20 malformed public inputs, 14 moved
+  proofs, 11 swapped sections, 5 random bodies, 60 random flips).
+- Python: 72 tests pass. It accepts the 100 valid cases and rejects all 440
+  mutated ones.
+- Rust: 27 tests pass (18 unit, 7 vector, 2 differential). Rust returns
+  Python's verdict on all 4 + 52 + 540 cases and every intermediate matches;
+  the Rust prover reproduces all 104 proofs byte for byte.
+- The v0.1 vector files are removed; git history keeps them.
 
 ## Not done yet
 
@@ -369,9 +452,10 @@ kubectl delete namespace rescue-build
 4. **QROM.** Accept "conjectured" (R1 option Q3), or fund a proof (R1 Q2,
    online extraction with compressed oracles)?
 5. **PRG speed and validation weight.**
-   - Options: keep SHAKE256 and accept 45–80 ms; move the leaf expansion to
-     multi-lane Keccak (AVX2 4-way) or TurboSHAKE256; or use AES-128-CTR for
-     the expansion only.
+   - Settled in v0.2 by 24 smaller trees (section "v0.2 tree split"). The
+     options considered before: keep SHAKE256 and accept 45–80 ms; move the
+     leaf expansion to multi-lane Keccak (AVX2 4-way) or TurboSHAKE256; or use
+     AES-128-CTR for the expansion only.
    - The task preferred stdlib primitives and no AES; whichever we pick
      changes the vectors and needs a version bump.
    - Measured on 2026-10-14: about 113 ms, so 45–80 ms was optimistic, and
@@ -379,9 +463,10 @@ kubectl delete namespace rescue-build
 6. **Encoding.** Is the argument of SPEC §7.7 sufficient? In particular, the
    `assert_add` lemma, and the rule that public values only change
    coefficients, never the instruction list.
-7. **Proof size.** 87.5 kB per rescue at τ = 16. Is that acceptable in the
-   annex, or should v0.2 look at τ = 11 (about 61 kB, 9× more PRG work) or a
-   FAEST v3-style BAVC?
+7. **Proof size.** 130.2 kB per rescue at τ = 24 (v0.1: 87.5 kB at τ = 16),
+   chosen so that the proof pays for its validation weight. Is that acceptable
+   in the annex, or should a later version look at a FAEST v3-style BAVC to
+   save bytes at the same verification cost?
 8. **Statement registry.**
    - Is restricting `K` to 1–64 printable ASCII bytes right?
    - The empty-suffix ML-DSA variant needs an id (0x02 is reserved).
