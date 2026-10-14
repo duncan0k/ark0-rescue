@@ -1,0 +1,30 @@
+[package]
+name = "voleith"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "VOLE-in-the-head rescue proofs, SPEC.md v0.1: verifier for statement 0x01"
+publish = false
+
+[lib]
+name = "voleith"
+# rlib for Rust users and tests; staticlib for linking into Bitcoin Core.
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+# SHAKE256 (FIPS 202). The only runtime dependency; see NOTES.md.
+sha3 = { version = "=0.10.9", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "unwind"
+
+# Tests verify 87.5 kB proofs: optimise them, keep debug assertions and
+# overflow checks.
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 3
