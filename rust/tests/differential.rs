@@ -1,4 +1,4 @@
-//! The bulk differential set (vectors/statement1-v0.1-differential.json,
+//! The bulk differential set (vectors/statement1-v0.2-differential.json,
 //! made by python/tools/gen_differential.py): the Rust verifier must return
 //! the Python verifier's verdict on every case, and the Rust prover must
 //! reproduce every valid proof from its inputs.
@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use common::{apply_edit, base64, hex, load_json, str_of, to_hex, u64_of};
 use serde_json::Value;
 
-const FILE: &str = "statement1-v0.1-differential.json";
+const FILE: &str = "statement1-v0.2-differential.json";
 
 fn threads() -> usize {
     std::thread::available_parallelism()

@@ -3,9 +3,9 @@
 #![forbid(unsafe_code)]
 
 /// Protocol version byte, first byte of every proof and hashed into mu.
-pub const VERSION: u8 = 0x01;
+pub const VERSION: u8 = 0x02;
 /// ASCII label used in every domain-separation tag.
-pub const VERSION_LABEL: &str = "v0.1";
+pub const VERSION_LABEL: &str = "v0.2";
 
 /// Security parameter and field size: GF(2^128).
 pub const LAMBDA: usize = 128;
@@ -110,8 +110,8 @@ impl TreeSplit {
     }
 }
 
-/// The parameter set of this version: 16 trees of depth 8.
-pub const SPLIT: TreeSplit = match TreeSplit::for_tau(16) {
+/// The parameter set of this version: 24 trees, 8 of depth 6 and 16 of depth 5.
+pub const SPLIT: TreeSplit = match TreeSplit::for_tau(24) {
     Some(s) => s,
     None => panic!("invalid tree split"),
 };

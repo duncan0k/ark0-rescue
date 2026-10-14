@@ -1,13 +1,35 @@
-//! The fixed-rng known-answer vectors in vectors/statement1-v0.1.json.
+//! The fixed-rng known-answer vectors in vectors/statement1-v0.2.json.
 
 mod common;
 
 use common::{apply_edit, hex, load_json, str_of, to_hex, u64_of};
 use voleith::circuit_info::{compression_circuit_digest, statement_circuit_info};
+use voleith::params::SPLIT;
 use voleith::STATEMENT1_ID;
 
 fn doc() -> serde_json::Value {
-    load_json("statement1-v0.1.json")
+    load_json("statement1-v0.2.json")
+}
+
+/// Offsets of statement 0x01 proofs under SPLIT (SPEC.md §10).
+struct Offsets {
+    u_tilde: usize,
+    a_tilde: usize,
+    chall3: usize,
+    total: usize,
+}
+
+fn offsets() -> Offsets {
+    let tau = SPLIT.tau();
+    let u_tilde = 18 + (tau - 1) * 5_307;
+    let a_tilde = u_tilde + 32 + 5_259;
+    let chall3 = a_tilde + 16 + 2_048 + 32 * tau;
+    Offsets {
+        u_tilde,
+        a_tilde,
+        chall3,
+        total: chall3 + 16,
+    }
 }
 
 #[test]
@@ -39,8 +61,25 @@ fn circuit_matches_vector_header() {
         u64_of(g, "AND_secret_secret")
     );
     assert_eq!(info.proof_len as u64, u64_of(&d, "proof_len"));
-    assert_eq!(info.proof_len, 87_506);
-    assert_eq!(voleith::proof_length(STATEMENT1_ID), Some(87_506));
+    assert_eq!(info.proof_len, 2_082 + 5_339 * SPLIT.tau());
+    assert_eq!(info.proof_len, offsets().total);
+    assert_eq!(voleith::proof_length(STATEMENT1_ID), Some(info.proof_len));
+    assert_eq!(
+        u64_of(&d, "protocol_version_byte"),
+        u64::from(voleith::params::VERSION)
+    );
+    let p = &d["params"];
+    let (tau0, k0, tau1, k1) = SPLIT.shape();
+    assert_eq!(u64_of(p, "tau") as usize, SPLIT.tau());
+    assert_eq!(
+        (
+            u64_of(p, "tau0") as usize,
+            u64_of(p, "k0") as usize,
+            u64_of(p, "tau1") as usize,
+            u64_of(p, "k1") as usize
+        ),
+        (tau0, k0, tau1, k1)
+    );
     assert_eq!(voleith::proof_length(2), None);
 }
 
@@ -104,9 +143,16 @@ fn valid_vectors_verify_with_matching_intermediates() {
         // Fields read from the proof.
         let lay_iv_pre = &proof[2..18];
         assert_eq!(to_hex(lay_iv_pre), str_of(im, "iv_pre"));
-        assert_eq!(to_hex(&proof[79_623..79_655]), str_of(im, "u_tilde"));
-        assert_eq!(to_hex(&proof[84_914..84_930]), str_of(im, "a_tilde"));
-        assert_eq!(to_hex(&proof[87_490..]), str_of(im, "chall3"));
+        let o = offsets();
+        assert_eq!(
+            to_hex(&proof[o.u_tilde..o.u_tilde + 32]),
+            str_of(im, "u_tilde")
+        );
+        assert_eq!(
+            to_hex(&proof[o.a_tilde..o.a_tilde + 16]),
+            str_of(im, "a_tilde")
+        );
+        assert_eq!(to_hex(&proof[o.chall3..]), str_of(im, "chall3"));
     }
 }
 
@@ -186,7 +232,7 @@ fn prover_refuses_bad_inputs() {
 fn negative_vectors_reject() {
     let d = doc();
     let negs = d["negative_vectors"].as_array().unwrap();
-    assert_eq!(negs.len(), 44);
+    assert_eq!(negs.len(), SPLIT.tau() + 28);
     for nv in negs {
         let desc = str_of(nv, "description");
         let base = &d["vectors"][u64_of(nv, "base_vector") as usize];
@@ -232,9 +278,9 @@ fn ffi_verify_s1() {
         assert_eq!(call(key, suffix, &y, &msg, &proof), 1);
         assert_eq!(call(key, suffix ^ 1, &y, &msg, &proof), 0);
         let mut bad = proof.clone();
-        bad[87_490] ^= 1;
+        bad[offsets().chall3] ^= 1;
         assert_eq!(call(key, suffix, &y, &msg, &bad), 0);
-        assert_eq!(call(key, suffix, &y, &msg, &proof[..87_505]), 0);
+        assert_eq!(call(key, suffix, &y, &msg, &proof[..proof.len() - 1]), 0);
         // Empty message: a null pointer with length 0 is allowed.
         if msg.is_empty() {
             // SAFETY: null only with length 0, other pointers from live slices.

@@ -27,7 +27,7 @@ pub enum Tag {
     Ch3,
 }
 
-const PREFIX: &[u8] = b"VOLEitH-rescue/v0.1/";
+const PREFIX: &[u8] = b"VOLEitH-rescue/v0.2/";
 
 impl Tag {
     fn name(self) -> &'static [u8] {
