@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 use crate::bits::nbytes;
 use crate::circuit::{Circuit, GateCounts};
 use crate::gadgets;
-use crate::params::{HEADER_BYTES, LAMBDA_BYTES, OPENING_BYTES, QS_MASK_BITS, TAU, VH_MASK_BITS};
+use crate::params::{TreeSplit, HEADER_BYTES, LAMBDA_BYTES, QS_MASK_BITS, SPLIT, VH_MASK_BITS};
 use crate::sha256;
 
 pub const STATEMENT1_ID: u8 = 0x01;
@@ -103,9 +103,11 @@ pub fn s1_hmac(key: &[u8], suffix: u8, x: &[u8]) -> [u8; 32] {
     sha256::hmac_sha256(key, &m)
 }
 
-/// Field sizes and offsets of a proof for one statement id (SPEC.md §10).
+/// Field sizes and offsets of a proof for one statement id and tree split
+/// (SPEC.md §10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
+    pub split: TreeSplit,
     pub ell: usize,
     pub n_constraints: usize,
     pub lhat: usize,
@@ -122,19 +124,20 @@ pub struct Layout {
 }
 
 impl Layout {
-    fn new(circuit: &Circuit) -> Self {
+    pub fn new(circuit: &Circuit, split: TreeSplit) -> Self {
         let ell = circuit.n_witness;
         let lhat = ell + QS_MASK_BITS + VH_MASK_BITS;
         let c_bytes = nbytes(lhat);
         let d_bytes = nbytes(ell);
         let off_iv_pre = HEADER_BYTES;
         let off_c = off_iv_pre + LAMBDA_BYTES;
-        let off_u_tilde = off_c + (TAU - 1) * c_bytes;
+        let off_u_tilde = off_c + (split.tau() - 1) * c_bytes;
         let off_d = off_u_tilde + 2 * LAMBDA_BYTES;
         let off_a_tilde = off_d + d_bytes;
         let off_open = off_a_tilde + LAMBDA_BYTES;
-        let off_chall3 = off_open + TAU * OPENING_BYTES;
+        let off_chall3 = off_open + split.openings_bytes();
         Layout {
+            split,
             ell,
             n_constraints: circuit.n_constraints,
             lhat,
@@ -150,9 +153,15 @@ impl Layout {
             total: off_chall3 + LAMBDA_BYTES,
         }
     }
+
+    /// The opening of tree i within a proof of this layout.
+    pub fn opening<'p>(&self, proof: &'p [u8], i: usize) -> &'p [u8] {
+        let off = self.off_open + self.split.opening_offset(i);
+        &proof[off..off + self.split.opening_bytes(i)]
+    }
 }
 
-/// A registered statement: its circuit and proof layout.
+/// A registered statement: its circuit and its proof layout under SPLIT.
 pub struct StatementDef {
     pub circuit: Circuit,
     pub layout: Layout,
@@ -165,7 +174,7 @@ pub fn lookup(statement_id: u8) -> Option<&'static StatementDef> {
     match statement_id {
         STATEMENT1_ID => Some(STATEMENT1.get_or_init(|| {
             let circuit = gadgets::build_statement1_circuit();
-            let layout = Layout::new(&circuit);
+            let layout = Layout::new(&circuit, SPLIT);
             StatementDef { circuit, layout }
         })),
         _ => None,

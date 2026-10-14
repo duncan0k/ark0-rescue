@@ -29,6 +29,10 @@ pub use proof::{
 };
 pub use statements::{s1_encode_public, STATEMENT1_ID};
 
+/// Other tree splits, for the benchmark only (feature `bench-splits`).
+#[cfg(feature = "bench-splits")]
+pub use proof::bench;
+
 /// Facts about a statement's circuit, for tests and tools.
 pub mod circuit_info {
     pub use crate::circuit::GateCounts;

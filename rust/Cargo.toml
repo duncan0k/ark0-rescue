@@ -11,6 +11,11 @@ name = "voleith"
 # rlib for Rust users and tests; staticlib for linking into Bitcoin Core.
 crate-type = ["rlib", "staticlib"]
 
+[features]
+# Exposes `voleith::bench`, which verifies and proves under other tree splits.
+# Only the benchmark uses it; verify() and the C ABI never do.
+bench-splits = []
+
 [dependencies]
 # SHAKE256 (FIPS 202). The only runtime dependency; see NOTES.md.
 sha3 = { version = "=0.10.9", default-features = false }

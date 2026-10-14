@@ -7,17 +7,26 @@
 #![forbid(unsafe_code)]
 
 use crate::bits;
-use crate::params::{K, N_LEAVES};
+use crate::params::MAX_DEPTH;
 use crate::sym::{Tag, Xof};
 use crate::vc::Seed;
 
-/// r_{i,j}: the first lhat bits of SHAKE256[exp](iv || u8(i) || u16le(N + j) || sd).
+/// r_{i,j}: the first lhat bits of SHAKE256[exp](iv || u8(i) || u16le(N + j) || sd)
+/// for leaf j of tree i, which has depth `depth` and N = 2^depth leaves.
 #[inline]
-pub fn expand_leaf(sd: &Seed, iv: &[u8; 16], tree: u8, j: usize, lhat: usize, out: &mut [u8]) {
+pub fn expand_leaf(
+    sd: &Seed,
+    iv: &[u8; 16],
+    tree: u8,
+    depth: usize,
+    j: usize,
+    lhat: usize,
+    out: &mut [u8],
+) {
     Xof::new(Tag::Exp)
         .update(iv)
         .update(&[tree])
-        .update(&((N_LEAVES + j) as u16).to_le_bytes())
+        .update(&(((1usize << depth) + j) as u16).to_le_bytes())
         .update(sd)
         .finalize_into(out);
     bits::clear_padding(out, lhat);
@@ -39,7 +48,8 @@ fn xor_step(v: &mut [u8], cur: &mut [u8], left: &[u8]) {
     }
 }
 
-/// Scratch space for `convert`: K pending left subtrees and the current one.
+/// Scratch space for `convert`: one pending left subtree per level and the
+/// current one.
 pub struct ConvertScratch {
     stack: Vec<Vec<u8>>,
     cur: Vec<u8>,
@@ -48,39 +58,40 @@ pub struct ConvertScratch {
 impl ConvertScratch {
     pub fn new(len: usize) -> Self {
         ConvertScratch {
-            stack: vec![vec![0u8; len]; K],
+            stack: vec![vec![0u8; len]; MAX_DEPTH],
             cur: vec![0u8; len],
         }
     }
 }
 
-/// ConvertToVOLE by FAEST's divide and conquer, streamed over x = 0..N:
-/// with `leaf(x, buf)` writing the vector r'_x into `buf`,
-/// `cols[b] = XOR of r'_x over x with bit b of x set` (b < K), and, if
-/// `total` is given, `total = XOR of all r'_x`. `cols` must be K zeroed
-/// slices of the vector length.
+/// ConvertToVOLE by FAEST's divide and conquer for a tree of depth
+/// k = `cols.len()`, streamed over x = 0..2^k: with `leaf(x, buf)` writing the
+/// vector r'_x into `buf`, `cols[b] = XOR of r'_x over x with bit b of x set`
+/// (b < k), and, if `total` is given, `total = XOR of all r'_x`. `cols` must
+/// be k zeroed slices of the vector length.
 pub fn convert(
     scratch: &mut ConvertScratch,
     cols: &mut [&mut [u8]],
     mut total: Option<&mut [u8]>,
     mut leaf: impl FnMut(usize, &mut [u8]),
 ) {
-    debug_assert_eq!(cols.len(), K);
-    for x in 0..N_LEAVES {
+    let depth = cols.len();
+    debug_assert!((1..=MAX_DEPTH).contains(&depth));
+    for x in 0..1usize << depth {
         leaf(x, &mut scratch.cur);
         // cur is the subtree sum of the level-0 node x. Climb while it is a
         // right child: add it to that level's column and merge it with its
         // pending left sibling.
         let mut level = 0;
-        while level < K && (x >> level) & 1 == 1 {
-            if level + 1 == K && total.is_none() {
+        while level < depth && (x >> level) & 1 == 1 {
+            if level + 1 == depth && total.is_none() {
                 xor_into(cols[level], &scratch.cur);
             } else {
                 xor_step(cols[level], &mut scratch.cur, &scratch.stack[level]);
             }
             level += 1;
         }
-        if level < K {
+        if level < depth {
             std::mem::swap(&mut scratch.stack[level], &mut scratch.cur);
         } else if let Some(t) = total.as_deref_mut() {
             t.copy_from_slice(&scratch.cur);
@@ -166,12 +177,19 @@ mod tests {
 
     #[test]
     fn convert_matches_definition() {
+        for depth in [4usize, 5, 6, 8] {
+            convert_matches_definition_at(depth);
+        }
+    }
+
+    fn convert_matches_definition_at(depth: usize) {
+        let n_leaves = 1usize << depth;
         let len = 5;
         let leafvec =
             |x: usize| -> Vec<u8> { (0..len).map(|k| (x * 31 + k * 7 + 1) as u8).collect() };
         // Prover form: all leaves.
         let mut scratch = ConvertScratch::new(len);
-        let mut cols = vec![vec![0u8; len]; K];
+        let mut cols = vec![vec![0u8; len]; depth];
         let mut total = vec![0u8; len];
         {
             let mut refs: Vec<&mut [u8]> = cols.iter_mut().map(|c| c.as_mut_slice()).collect();
@@ -181,7 +199,7 @@ mod tests {
         }
         for (b, col) in cols.iter().enumerate() {
             let mut expect = vec![0u8; len];
-            for x in 0..N_LEAVES {
+            for x in 0..n_leaves {
                 if (x >> b) & 1 == 1 {
                     xor_into(&mut expect, &leafvec(x));
                 }
@@ -189,13 +207,13 @@ mod tests {
             assert_eq!(col, &expect);
         }
         let mut expect = vec![0u8; len];
-        for x in 0..N_LEAVES {
+        for x in 0..n_leaves {
             xor_into(&mut expect, &leafvec(x));
         }
         assert_eq!(total, expect);
         // Verifier form: leaf 0 is unknown (zero), no total.
         let mut scratch = ConvertScratch::new(len);
-        let mut cols = vec![vec![0u8; len]; K];
+        let mut cols = vec![vec![0u8; len]; depth];
         {
             let mut refs: Vec<&mut [u8]> = cols.iter_mut().map(|c| c.as_mut_slice()).collect();
             convert(&mut scratch, &mut refs, None, |x, buf| {
@@ -208,7 +226,7 @@ mod tests {
         }
         for (b, col) in cols.iter().enumerate() {
             let mut expect = vec![0u8; len];
-            for x in 1..N_LEAVES {
+            for x in 1..n_leaves {
                 if (x >> b) & 1 == 1 {
                     xor_into(&mut expect, &leafvec(x));
                 }
