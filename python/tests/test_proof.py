@@ -7,11 +7,12 @@ import unittest
 import voleith
 from voleith import proof as P
 from voleith import statements as st
-from voleith.params import TAU, K, LAMBDA, MAX_MESSAGE_LEN
-from voleith.vc import OPENING_BYTES
+from voleith.params import LAMBDA, MAX_MESSAGE_LEN, SPLIT
+from voleith import vc
 
 WALLET_KEY = b"ark0-wallet v1 schnorr"
-PROOF_LEN = 87506  # SPEC.md §10
+TAU = SPLIT.tau
+PROOF_LEN = 2082 + 5339 * TAU  # SPEC.md §10 for statement 0x01
 
 
 def seeded_rng(seed):
@@ -83,8 +84,8 @@ class TestProofEndToEnd(unittest.TestCase):
         ell = st.REGISTRY[1].circuit().n_witness
         lhat = ell + 3 * LAMBDA
         formula = (2 + 16 + (TAU - 1) * ((lhat + 7) // 8) + 32 + (ell + 7) // 8 + 16
-                   + TAU * (K * 16 + 32) + 16)
-        self.assertEqual(OPENING_BYTES, K * 16 + 32)
+                   + sum(k * 16 + 32 for k in SPLIT.depths) + 16)
+        self.assertEqual(sum(vc.opening_bytes(k) for k in SPLIT.depths), 2048 + 32 * TAU)
         self.assertEqual(formula, PROOF_LEN)
         self.assertEqual(voleith.proof_length(1), PROOF_LEN)
         for _, _, _, proof in self.cases:
@@ -105,15 +106,16 @@ class TestProofEndToEnd(unittest.TestCase):
             "iv_pre": lay.off_iv_pre + 5,
             "c_1 first": lay.off_c,
             "c_8 middle": lay.off_c + 7 * lay.c_bytes + lay.c_bytes // 2,
-            "c_15 last data bit": lay.off_c + 15 * lay.c_bytes - 1,
+            "last c last data bit": lay.off_c + (TAU - 1) * lay.c_bytes - 1,
             "u_tilde first": lay.off_u_tilde,
             "u_tilde last": lay.off_u_tilde + 31,
             "d first": lay.off_d,
             "d last data bit": lay.off_d + lay.d_bytes - 1,
             "a_tilde": lay.off_a_tilde + 3,
             "tree 0 co-path top": lay.off_open,
-            "tree 7 co-path leaf level": lay.off_open + 7 * OPENING_BYTES + 7 * 16 + 3,
-            "tree 15 hidden commitment": lay.off_open + 15 * OPENING_BYTES + K * 16 + 31,
+            "tree 7 co-path leaf level": lay.open_offsets[7] + (SPLIT.depths[7] - 1) * 16 + 3,
+            "last tree hidden commitment": (lay.open_offsets[TAU - 1]
+                                            + SPLIT.depths[TAU - 1] * 16 + 31),
             "chall3 first": lay.off_chall3,
             "chall3 last": lay.off_chall3 + 15,
         }
@@ -220,7 +222,7 @@ class TestProofEndToEnd(unittest.TestCase):
         # Control: the hook itself changes nothing.
         self.assertTrue(voleith.verify(self.stmt, self.msg, run(lambda cs, _: cs, b"t0")))
 
-        # All of c_1..c_15 wrong: rejected unless every delta_i is 0 (2^-120).
+        # All corrections wrong: rejected unless every delta_i with i >= 1 is 0.
         for row in (hash_mask_row, lay.ell + 3, 7):
             def tamper_all(cs, _, row=row):
                 return [c ^ (1 << row) for c in cs]
@@ -233,7 +235,8 @@ class TestProofEndToEnd(unittest.TestCase):
             return cs
         for seed in (b"t2", b"t3", b"t4"):
             proof = run(tamper_one, seed)
-            delta_4 = proof[lay.off_chall3 + 4]
+            delta = int.from_bytes(proof[lay.off_chall3:lay.off_chall3 + 16], "little")
+            delta_4 = SPLIT.challenge_index(delta, 4)
             self.assertIs(voleith.verify(self.stmt, self.msg, proof), delta_4 == 0, seed)
 
     def test_cheating_prover_with_wrong_seed(self):

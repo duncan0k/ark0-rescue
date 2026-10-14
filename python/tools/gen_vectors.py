@@ -88,25 +88,28 @@ def negative_vectors(base, lay):
         return {"op": "xor", "offset": offset, "mask": "%02x" % mask}
 
     none = {"op": "none"}
-    open_off = lay.off_open
-    ob = 160
-    add("version byte 0x01 -> 0x00", xor(0, 0x01))
-    add("version byte 0x01 -> 0x02", xor(0, 0x03))
+    tau = lay.split.tau
+    depths = lay.split.depths
+    v = params.VERSION
+    add("version byte 0x%02x -> 0x%02x" % (v, v ^ 0x01), xor(0, 0x01))
+    add("version byte 0x%02x -> 0x%02x" % (v, v ^ 0x03), xor(0, 0x03))
     add("statement id byte 0x01 -> 0x03", xor(1, 0x02))
     add("iv_pre bit flip", xor(lay.off_iv_pre + 5, 0x01))
-    for i in range(15):
+    for i in range(tau - 1):
         add("padding bit of c_%d set" % (i + 1), xor(lay.off_c + (i + 1) * lay.c_bytes - 1, 0x80))
     add("c_1 first byte bit flip", xor(lay.off_c, 0x01))
-    add("c_15 last data bit flip", xor(lay.off_c + 15 * lay.c_bytes - 1, 0x01))
+    add("c_%d last data bit flip" % (tau - 1), xor(lay.off_c + (tau - 1) * lay.c_bytes - 1, 0x01))
     add("u_tilde first byte bit flip", xor(lay.off_u_tilde, 0x01))
     add("u_tilde last byte bit flip", xor(lay.off_u_tilde + 31, 0x80))
     add("d first byte bit flip", xor(lay.off_d, 0x01))
     add("d last data bit flip", xor(lay.off_d + lay.d_bytes - 1, 0x01))
     add("padding bit of d set", xor(lay.off_d + lay.d_bytes - 1, 0x80))
     add("a_tilde bit flip", xor(lay.off_a_tilde + 3, 0x01))
-    add("tree 0 co-path seed at depth 1", xor(open_off, 0x01))
-    add("tree 7 co-path seed at depth 8", xor(open_off + 7 * ob + 7 * 16 + 3, 0x01))
-    add("tree 15 hidden-leaf commitment", xor(open_off + 15 * ob + 8 * 16 + 31, 0x01))
+    add("tree 0 co-path seed at depth 1", xor(lay.open_offsets[0], 0x01))
+    add("tree 7 co-path seed at depth %d" % depths[7],
+        xor(lay.open_offsets[7] + (depths[7] - 1) * 16 + 3, 0x01))
+    add("tree %d hidden-leaf commitment" % (tau - 1),
+        xor(lay.open_offsets[tau - 1] + depths[tau - 1] * 16 + 31, 0x01))
     add("chall3 first byte bit flip", xor(lay.off_chall3, 0x01))
     add("chall3 last byte bit flip", xor(lay.off_chall3 + 15, 0x80))
     add("proof truncated by one byte", {"op": "truncate", "length": lay.total - 1})
@@ -132,7 +135,7 @@ def main():
     doc = {
         "spec": "SPEC.md v0.1",
         "protocol_version_byte": params.VERSION,
-        "params": {"lambda": params.LAMBDA, "tau": params.TAU, "k": params.K,
+        "params": {"lambda": params.LAMBDA, "tau": params.SPLIT.tau, "k": params.SPLIT.k0,
                    "rho_bytes": params.RHO_BYTES},
         "statement_id": st.STATEMENT1_ID,
         "circuit": {

@@ -13,11 +13,58 @@ VERSION_LABEL = "v0.1"
 LAMBDA = 128
 LAMBDA_BYTES = LAMBDA // 8
 
-# Vector commitments: TAU independent GGM trees with 2^K leaves each.
-TAU = 16
-K = 8
-N_LEAVES = 1 << K
-assert TAU * K == LAMBDA
+# Deepest GGM tree supported (node indices are encoded in 16 bits).
+MAX_DEPTH = 8
+
+
+class TreeSplit:
+    """FAEST-style split of the LAMBDA challenge bits over tau GGM trees.
+
+    The first tau0 = LAMBDA mod tau trees have depth k0 = ceil(LAMBDA / tau),
+    the other tau1 = tau - tau0 trees depth k1 = floor(LAMBDA / tau), so that
+    tau0 * k0 + tau1 * k1 = LAMBDA. Tree i hides the leaf whose index is
+    bits [offset_i, offset_i + depth_i) of Delta, offset_i being the sum of
+    the depths of the trees before it.
+    """
+
+    __slots__ = ("tau", "tau0", "k0", "tau1", "k1", "depths", "offsets")
+
+    def __init__(self, tau):
+        if type(tau) is not int or not 1 <= tau <= LAMBDA:
+            raise ValueError("tau must be an integer in [1, LAMBDA]")
+        self.tau = tau
+        self.k1 = LAMBDA // tau
+        self.k0 = -(-LAMBDA // tau)
+        self.tau0 = LAMBDA % tau
+        self.tau1 = tau - self.tau0
+        if self.k0 > MAX_DEPTH:
+            raise ValueError("trees deeper than %d are not supported" % MAX_DEPTH)
+        self.depths = (self.k0,) * self.tau0 + (self.k1,) * self.tau1
+        offsets = []
+        acc = 0
+        for k in self.depths:
+            offsets.append(acc)
+            acc += k
+        assert acc == LAMBDA
+        self.offsets = tuple(offsets)
+
+    def challenge_index(self, delta, i):
+        """The hidden leaf of tree i: bits [offset_i, offset_i + depth_i) of Delta."""
+        return (delta >> self.offsets[i]) & ((1 << self.depths[i]) - 1)
+
+    def __eq__(self, other):
+        return isinstance(other, TreeSplit) and other.tau == self.tau
+
+    def __hash__(self):
+        return hash(self.tau)
+
+    def __repr__(self):
+        return "TreeSplit(%d: %d x %d + %d x %d)" % (self.tau, self.tau0, self.k0,
+                                                     self.tau1, self.k1)
+
+
+# The parameter set of this version: 16 trees of depth 8.
+SPLIT = TreeSplit(16)
 
 # Extra VOLE rows appended after the witness rows:
 #   QS_MASK_BITS rows mask the QuickSilver response (one GF(2^128) element),

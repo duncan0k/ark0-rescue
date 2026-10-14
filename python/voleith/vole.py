@@ -1,94 +1,93 @@
 """Seed expansion, ConvertToVOLE and the row/column transposition (SPEC.md §5).
 
-Bit vectors of length lhat are ints. The VOLE has LAMBDA = TAU*K columns:
-column K*i + b belongs to tree i and bit b of its challenge Delta_i.
+Bit vectors of length lhat are ints. The VOLE has LAMBDA columns: tree i of
+a TreeSplit owns columns offset_i .. offset_i + depth_i - 1, column
+offset_i + b belonging to bit b of its hidden-leaf index.
 """
 
-from .params import TAU, K, N_LEAVES, LAMBDA, LAMBDA_BYTES
+from .params import LAMBDA, LAMBDA_BYTES
 from .sym import xof, u8, u16le
 from . import bits
 from . import vc
 
 
-def expand_leaf(sd, iv, tree, j, lhat):
+def expand_leaf(sd, iv, tree, depth, j, lhat):
     """r_{i,j} = SHAKE256["exp"](iv || u8(i) || u16le(N + j) || sd_{i,j}), first lhat bits."""
-    data = xof("exp", iv + u8(tree) + u16le(N_LEAVES + j) + sd, bits.nbytes(lhat))
+    node = (1 << depth) + j
+    data = xof("exp", iv + u8(tree) + u16le(node) + sd, bits.nbytes(lhat))
     return int.from_bytes(data, "little") & ((1 << lhat) - 1)
 
 
-def convert_prover(rs):
+def convert_prover(rs, depth):
     """u = sum_x r_x, v_b = sum_{x : bit b of x = 1} r_x."""
     u = 0
-    v = [0] * K
+    v = [0] * depth
     for x, r in enumerate(rs):
         u ^= r
-        for b_ in range(K):
+        for b_ in range(depth):
             if (x >> b_) & 1:
                 v[b_] ^= r
     return u, v
 
 
-def convert_verifier(rs, jstar):
+def convert_verifier(rs, jstar, depth):
     """q_b = sum_{x != j*} (bit b of (x XOR j*)) r_x, so that q_b = v_b + Delta_b u."""
-    q = [0] * K
+    q = [0] * depth
     for x, r in enumerate(rs):
         if x == jstar:
             continue
         y = x ^ jstar
-        for b_ in range(K):
+        for b_ in range(depth):
             if (y >> b_) & 1:
                 q[b_] ^= r
     return q
 
 
-def tree_roots(r, iv):
-    data = xof("root", iv + r, TAU * LAMBDA_BYTES)
-    return [data[i * LAMBDA_BYTES:(i + 1) * LAMBDA_BYTES] for i in range(TAU)]
+def tree_roots(r, iv, tau):
+    data = xof("root", iv + r, tau * LAMBDA_BYTES)
+    return [data[i * LAMBDA_BYTES:(i + 1) * LAMBDA_BYTES] for i in range(tau)]
 
 
-def commit(r, iv, lhat):
-    """Prover side. Returns (hcom, decommitments, corrections c_1..c_{TAU-1}, u, V columns)."""
-    roots = tree_roots(r, iv)
+def commit(r, iv, lhat, split):
+    """Prover side. Returns (hcom, decommitments, corrections c_1..c_{tau-1}, u, V columns)."""
+    roots = tree_roots(r, iv, split.tau)
     tree_hashes = []
     decom = []
     us = []
     cols = [0] * LAMBDA
-    for i in range(TAU):
-        h, nodes, sds, coms = vc.commit(roots[i], iv, i)
+    for i in range(split.tau):
+        depth = split.depths[i]
+        h, nodes, sds, coms = vc.commit(roots[i], iv, i, depth)
         tree_hashes.append(h)
         decom.append((nodes, coms))
-        rs = [expand_leaf(sds[j], iv, i, j, lhat) for j in range(N_LEAVES)]
-        u_i, v_i = convert_prover(rs)
+        rs = [expand_leaf(sds[j], iv, i, depth, j, lhat) for j in range(1 << depth)]
+        u_i, v_i = convert_prover(rs, depth)
         us.append(u_i)
-        for b_ in range(K):
-            cols[K * i + b_] = v_i[b_]
+        for b_ in range(depth):
+            cols[split.offsets[i] + b_] = v_i[b_]
     u = us[0]
-    corrections = [u ^ us[i] for i in range(1, TAU)]
+    corrections = [u ^ us[i] for i in range(1, split.tau)]
     hcom = xof("hcom", b"".join(tree_hashes), 2 * LAMBDA_BYTES)
     return hcom, decom, corrections, u, cols
 
 
-def challenge_index(delta, i):
-    """Delta_i: bits K*i .. K*i+K-1 of Delta, least significant first."""
-    return (delta >> (K * i)) & (N_LEAVES - 1)
-
-
-def reconstruct(openings, corrections, delta, iv, lhat):
+def reconstruct(openings, corrections, delta, iv, lhat, split):
     """Verifier side. Returns (hcom, Q columns) with Q = V + u * Delta (columnwise)."""
     tree_hashes = []
     cols = [0] * LAMBDA
-    for i in range(TAU):
-        jstar = challenge_index(delta, i)
-        h, sds = vc.reconstruct(openings[i], iv, i, jstar)
+    for i in range(split.tau):
+        depth = split.depths[i]
+        jstar = split.challenge_index(delta, i)
+        h, sds = vc.reconstruct(openings[i], iv, i, depth, jstar)
         tree_hashes.append(h)
-        rs = [None if j == jstar else expand_leaf(sds[j], iv, i, j, lhat)
-              for j in range(N_LEAVES)]
-        q_i = convert_verifier(rs, jstar)
-        for b_ in range(K):
+        rs = [None if j == jstar else expand_leaf(sds[j], iv, i, depth, j, lhat)
+              for j in range(1 << depth)]
+        q_i = convert_verifier(rs, jstar, depth)
+        for b_ in range(depth):
             col = q_i[b_]
             if i > 0 and (jstar >> b_) & 1:
                 col ^= corrections[i - 1]
-            cols[K * i + b_] = col
+            cols[split.offsets[i] + b_] = col
     hcom = xof("hcom", b"".join(tree_hashes), 2 * LAMBDA_BYTES)
     return hcom, cols
 

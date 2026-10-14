@@ -4,7 +4,7 @@ import random
 import unittest
 
 from voleith import gf128, vc, vole
-from voleith.params import TAU, K, N_LEAVES, LAMBDA
+from voleith.params import LAMBDA, SPLIT, TreeSplit
 from voleith.unihash import VoleHash, ZkHash
 
 RNG = random.Random(2026)
@@ -14,59 +14,97 @@ def rb(n):
     return RNG.randbytes(n)
 
 
+DEPTHS = sorted(set(SPLIT.depths))
+
+
+class TestTreeSplit(unittest.TestCase):
+    def test_faest_split(self):
+        for tau, expect in ((16, (0, 8, 16, 8)), (22, (18, 6, 4, 5)), (24, (8, 6, 16, 5)),
+                            (26, (24, 5, 2, 4)), (32, (0, 4, 32, 4))):
+            s = TreeSplit(tau)
+            self.assertEqual((s.tau0, s.k0, s.tau1, s.k1), expect)
+            self.assertEqual(sum(s.depths), LAMBDA)
+            self.assertEqual(len(s.depths), tau)
+            self.assertEqual(s.offsets[0], 0)
+            self.assertEqual(s.offsets[-1] + s.depths[-1], LAMBDA)
+        for bad in (0, 15, 129, 16.0, True):
+            with self.assertRaises(ValueError):
+                TreeSplit(bad)
+
+    def test_challenge_decoding(self):
+        s = TreeSplit(24)
+        delta = RNG.getrandbits(128)
+        bits = [(delta >> j) & 1 for j in range(128)]
+        pos = 0
+        for i in range(s.tau):
+            k = s.depths[i]
+            self.assertEqual(s.challenge_index(delta, i),
+                             sum(bits[pos + b] << b for b in range(k)))
+            pos += k
+
+
 class TestVectorCommitment(unittest.TestCase):
     def test_open_reconstruct(self):
         rng = random.Random(21)
-        root = rb(16)
-        iv = rb(16)
-        h, nodes, sds, coms = vc.commit(root, iv, 3)
-        for jstar in [0, 1, 128, 255] + rng.sample(range(N_LEAVES), 4):
-            opening = vc.open_(nodes, coms, jstar)
-            self.assertEqual(len(opening), vc.OPENING_BYTES)
-            h2, sds2 = vc.reconstruct(opening, iv, 3, jstar)
-            self.assertEqual(h2, h)
-            self.assertIsNone(sds2[jstar])
-            for j in range(N_LEAVES):
-                if j != jstar:
-                    self.assertEqual(sds2[j], sds[j])
+        for depth in DEPTHS:
+            n_leaves = 1 << depth
+            root = rb(16)
+            iv = rb(16)
+            h, nodes, sds, coms = vc.commit(root, iv, 3, depth)
+            jstars = sorted({0, 1, n_leaves // 2, n_leaves - 1}) + rng.sample(range(n_leaves), 4)
+            for jstar in jstars:
+                opening = vc.open_(nodes, coms, depth, jstar)
+                self.assertEqual(len(opening), vc.opening_bytes(depth))
+                h2, sds2 = vc.reconstruct(opening, iv, 3, depth, jstar)
+                self.assertEqual(h2, h)
+                self.assertIsNone(sds2[jstar])
+                for j in range(n_leaves):
+                    if j != jstar:
+                        self.assertEqual(sds2[j], sds[j])
 
     def test_tampered_opening_changes_commitment(self):
-        root, iv = rb(16), rb(16)
-        h, nodes, _, coms = vc.commit(root, iv, 0)
-        opening = vc.open_(nodes, coms, 77)
-        for pos in (0, 15, 16 * (K - 1), vc.OPENING_BYTES - 1):
-            bad = bytearray(opening)
-            bad[pos] ^= 0x10
-            self.assertNotEqual(vc.reconstruct(bytes(bad), iv, 0, 77)[0], h)
-        # Opening at the wrong index does not reproduce the commitment.
-        self.assertNotEqual(vc.reconstruct(opening, iv, 0, 78)[0], h)
-        # The tree index and the IV are bound.
-        self.assertNotEqual(vc.reconstruct(opening, iv, 1, 77)[0], h)
-        self.assertNotEqual(vc.reconstruct(opening, rb(16), 0, 77)[0], h)
+        for depth in DEPTHS:
+            root, iv = rb(16), rb(16)
+            jstar = 17 % (1 << depth)
+            h, nodes, _, coms = vc.commit(root, iv, 0, depth)
+            opening = vc.open_(nodes, coms, depth, jstar)
+            for pos in (0, 15, 16 * (depth - 1), vc.opening_bytes(depth) - 1):
+                bad = bytearray(opening)
+                bad[pos] ^= 0x10
+                self.assertNotEqual(vc.reconstruct(bytes(bad), iv, 0, depth, jstar)[0], h)
+            # Opening at the wrong index does not reproduce the commitment.
+            self.assertNotEqual(vc.reconstruct(opening, iv, 0, depth, jstar ^ 1)[0], h)
+            # The tree index and the IV are bound.
+            self.assertNotEqual(vc.reconstruct(opening, iv, 1, depth, jstar)[0], h)
+            self.assertNotEqual(vc.reconstruct(opening, rb(16), 0, depth, jstar)[0], h)
 
 
 class TestConvertToVole(unittest.TestCase):
     def test_small_vole_relation(self):
         rng = random.Random(22)
         nbits = 300
-        rs = [rng.getrandbits(nbits) for _ in range(N_LEAVES)]
-        u, v = vole.convert_prover(rs)
-        for jstar in (0, 1, 200, 255):
-            masked = [None if x == jstar else r for x, r in enumerate(rs)]
-            q = vole.convert_verifier(masked, jstar)
-            for b in range(K):
-                self.assertEqual(q[b], v[b] ^ (u if (jstar >> b) & 1 else 0))
+        for depth in DEPTHS:
+            n_leaves = 1 << depth
+            rs = [rng.getrandbits(nbits) for _ in range(n_leaves)]
+            u, v = vole.convert_prover(rs, depth)
+            for jstar in sorted({0, 1, n_leaves - 3, n_leaves - 1}):
+                masked = [None if x == jstar else r for x, r in enumerate(rs)]
+                q = vole.convert_verifier(masked, jstar, depth)
+                for b in range(depth):
+                    self.assertEqual(q[b], v[b] ^ (u if (jstar >> b) & 1 else 0))
 
     def test_full_commit_reconstruct(self):
         lhat = 333
         r, iv = rb(16), rb(16)
-        hcom, decom, corrections, u, cols = vole.commit(r, iv, lhat)
-        self.assertEqual(len(corrections), TAU - 1)
+        split = SPLIT
+        hcom, decom, corrections, u, cols = vole.commit(r, iv, lhat, split)
+        self.assertEqual(len(corrections), split.tau - 1)
         for _ in range(2):
             delta = RNG.getrandbits(128)
-            openings = [vc.open_(decom[i][0], decom[i][1], vole.challenge_index(delta, i))
-                        for i in range(TAU)]
-            hcom2, qcols = vole.reconstruct(openings, corrections, delta, iv, lhat)
+            openings = [vc.open_(decom[i][0], decom[i][1], split.depths[i],
+                                 split.challenge_index(delta, i))
+                        for i in range(split.tau)]
+            hcom2, qcols = vole.reconstruct(openings, corrections, delta, iv, lhat, split)
             self.assertEqual(hcom2, hcom)
             for j in range(LAMBDA):
                 self.assertEqual(qcols[j], cols[j] ^ (u if (delta >> j) & 1 else 0))

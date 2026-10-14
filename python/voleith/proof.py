@@ -2,13 +2,17 @@
 
 prove(statement, witness, message, rng) -> proof bytes
 verify(statement, message, proof) -> bool
+
+Both use the parameter set of this version (params.SPLIT). The private
+_prove_impl and _verify_impl also take another TreeSplit; that exists only
+to generate and check proofs for benchmarks of other splits.
 """
 
 import hmac
 import os
 
 from . import bits, gf128, vc, vole
-from .params import (VERSION, LAMBDA, LAMBDA_BYTES, TAU, QS_MASK_BITS,
+from .params import (VERSION, LAMBDA, LAMBDA_BYTES, SPLIT, QS_MASK_BITS,
                      VH_MASK_BITS, RHO_BYTES, MAX_MESSAGE_LEN, HEADER_BYTES)
 from .statements import REGISTRY, Statement
 from .sym import xof, xof_parts, u8, u16le, u64le
@@ -16,9 +20,11 @@ from .unihash import VoleHash, ZkHash
 
 
 class Layout:
-    """Field sizes and offsets of a proof for one statement id (SPEC.md §10)."""
+    """Field sizes and offsets of a proof for one statement id and tree split
+    (SPEC.md §10)."""
 
-    def __init__(self, circuit):
+    def __init__(self, circuit, split):
+        self.split = split
         self.ell = circuit.n_witness
         self.n_constraints = circuit.n_constraints
         self.lhat = self.ell + QS_MASK_BITS + VH_MASK_BITS
@@ -26,21 +32,32 @@ class Layout:
         self.d_bytes = bits.nbytes(self.ell)
         self.off_iv_pre = HEADER_BYTES
         self.off_c = self.off_iv_pre + LAMBDA_BYTES
-        self.off_u_tilde = self.off_c + (TAU - 1) * self.c_bytes
+        self.off_u_tilde = self.off_c + (split.tau - 1) * self.c_bytes
         self.off_d = self.off_u_tilde + 2 * LAMBDA_BYTES
         self.off_a_tilde = self.off_d + self.d_bytes
         self.off_open = self.off_a_tilde + LAMBDA_BYTES
-        self.off_chall3 = self.off_open + TAU * vc.OPENING_BYTES
+        # Opening i starts at open_offsets[i] and is opening_bytes(depth_i) long.
+        self.open_offsets = []
+        off = self.off_open
+        for k in split.depths:
+            self.open_offsets.append(off)
+            off += vc.opening_bytes(k)
+        self.off_chall3 = off
         self.total = self.off_chall3 + LAMBDA_BYTES
+
+    def opening(self, proof, i):
+        off = self.open_offsets[i]
+        return proof[off:off + vc.opening_bytes(self.split.depths[i])]
 
 
 _LAYOUTS = {}
 
 
-def layout(statement_id):
-    if statement_id not in _LAYOUTS:
-        _LAYOUTS[statement_id] = Layout(REGISTRY[statement_id].circuit())
-    return _LAYOUTS[statement_id]
+def layout(statement_id, split=SPLIT):
+    key = (statement_id, split.tau)
+    if key not in _LAYOUTS:
+        _LAYOUTS[key] = Layout(REGISTRY[statement_id].circuit(), split)
+    return _LAYOUTS[key]
 
 
 def proof_length(statement_id):
@@ -83,7 +100,7 @@ def prove(statement, witness, message, rng=None):
 
 
 def _prove_impl(statement, witness, message, rng, enforce_relation, trace=False,
-                witness_bits_override=None, tamper_corrections=None):
+                witness_bits_override=None, tamper_corrections=None, split=SPLIT):
     """Prover core. `enforce_relation=False`, `witness_bits_override` and
     `tamper_corrections` exist only so tests can play a cheating prover;
     prove() never uses them."""
@@ -102,7 +119,7 @@ def _prove_impl(statement, witness, message, rng, enforce_relation, trace=False,
         raise ValueError("witness does not satisfy the relation")
 
     circ = sdef.circuit()
-    lay = layout(statement.statement_id)
+    lay = layout(statement.statement_id, split)
     ell, lhat = lay.ell, lay.lhat
     pub_bits = sdef.public_bits(parsed)
     _, wit_bits, ok = circ.evaluate(pub_bits, sdef.secret_bits(witness))
@@ -121,7 +138,7 @@ def _prove_impl(statement, witness, message, rng, enforce_relation, trace=False,
     rnd = xof("rnd", u16le(len(witness)) + witness + mu + rho, 2 * LAMBDA_BYTES)
     r, iv_pre = rnd[:LAMBDA_BYTES], rnd[LAMBDA_BYTES:]
     iv = xof("iv", iv_pre + mu, LAMBDA_BYTES)
-    hcom, decom, corrections, u, v_cols = vole.commit(r, iv, lhat)
+    hcom, decom, corrections, u, v_cols = vole.commit(r, iv, lhat, split)
     if tamper_corrections is not None:
         if enforce_relation:
             raise ValueError("tampering is for cheating-prover tests only")
@@ -151,9 +168,9 @@ def _prove_impl(statement, witness, message, rng, enforce_relation, trace=False,
     # Phase 4: open all but one leaf per tree.
     delta = gf128.from_bytes(chall3)
     openings = []
-    for i in range(TAU):
+    for i in range(split.tau):
         nodes, coms = decom[i]
-        openings.append(vc.open_(nodes, coms, vole.challenge_index(delta, i)))
+        openings.append(vc.open_(nodes, coms, split.depths[i], split.challenge_index(delta, i)))
 
     proof = b"".join([bytes([VERSION, statement.statement_id]), iv_pre] + c_enc
                      + [u_tilde, d_enc, a_tilde] + openings + [chall3])
@@ -161,9 +178,9 @@ def _prove_impl(statement, witness, message, rng, enforce_relation, trace=False,
         raise AssertionError("internal error: proof length")
     info = None
     if trace:
-        tree_hashes = [vc.tree_hash(iv, i, decom[i][1]) for i in range(TAU)]
+        tree_hashes = [vc.tree_hash(iv, i, decom[i][1]) for i in range(split.tau)]
         info = {"mu": mu, "rho": rho, "r": r, "iv_pre": iv_pre, "iv": iv,
-                "roots": b"".join(vole.tree_roots(r, iv)),
+                "roots": b"".join(vole.tree_roots(r, iv, split.tau)),
                 "tree_hashes": b"".join(tree_hashes), "hcom": hcom,
                 "chall1": chall1, "u_tilde": u_tilde, "h_v": h_v,
                 "chall2": chall2, "a_tilde": a_tilde, "b_tilde": b_tilde,
@@ -181,6 +198,11 @@ def verify(statement, message, proof):
     exception would be a bug, and callers must treat it as rejection (a
     consensus implementation maps every internal error to False).
     """
+    return _verify_impl(statement, message, proof, SPLIT)
+
+
+def _verify_impl(statement, message, proof, split):
+    """verify() for a given tree split; other splits are for benchmarks only."""
     # 1. Statement: known id, canonical public inputs.
     if not isinstance(statement, Statement):
         return False
@@ -196,7 +218,7 @@ def verify(statement, message, proof):
         return False
     if not isinstance(proof, bytes):
         return False
-    lay = layout(sid)
+    lay = layout(sid, split)
     if len(proof) != lay.total:
         return False
     # 3. Header.
@@ -204,7 +226,7 @@ def verify(statement, message, proof):
         return False
     # 4. Bit strings with padding: every padding bit must be zero.
     corrections = []
-    for i in range(TAU - 1):
+    for i in range(split.tau - 1):
         off = lay.off_c + i * lay.c_bytes
         c = bits.decode(proof[off:off + lay.c_bytes], lay.lhat)
         if c is None:
@@ -221,11 +243,11 @@ def _verify_core(statement, parsed, sdef, lay, message, proof, corrections, d):
     iv_pre = proof[lay.off_iv_pre:lay.off_iv_pre + LAMBDA_BYTES]
     u_tilde = proof[lay.off_u_tilde:lay.off_u_tilde + 2 * LAMBDA_BYTES]
     a_tilde = proof[lay.off_a_tilde:lay.off_a_tilde + LAMBDA_BYTES]
-    openings = [proof[lay.off_open + i * vc.OPENING_BYTES:
-                      lay.off_open + (i + 1) * vc.OPENING_BYTES] for i in range(TAU)]
+    split = lay.split
+    openings = [lay.opening(proof, i) for i in range(split.tau)]
     chall3 = proof[lay.off_chall3:lay.off_chall3 + LAMBDA_BYTES]
     c_enc = [proof[lay.off_c + i * lay.c_bytes:lay.off_c + (i + 1) * lay.c_bytes]
-             for i in range(TAU - 1)]
+             for i in range(split.tau - 1)]
     d_enc = proof[lay.off_d:lay.off_d + lay.d_bytes]
 
     mu = compute_mu(statement.statement_id, statement.public_inputs, message)
@@ -233,7 +255,7 @@ def _verify_core(statement, parsed, sdef, lay, message, proof, corrections, d):
     delta = gf128.from_bytes(chall3)
 
     # Reconstruct the VOLE keys Q = V + u * Delta and the commitment.
-    hcom, q_cols = vole.reconstruct(openings, corrections, delta, iv, lhat)
+    hcom, q_cols = vole.reconstruct(openings, corrections, delta, iv, lhat, split)
     chall1 = xof_parts("ch1", [mu, hcom] + c_enc + [iv_pre], 2 * LAMBDA_BYTES)
 
     # VOLE consistency: recompute h_V from Q and u_tilde.

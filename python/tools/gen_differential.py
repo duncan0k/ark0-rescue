@@ -46,8 +46,7 @@ sys.path.insert(0, os.path.join(HERE, ".."))
 import voleith  # noqa: E402
 from voleith import proof as P  # noqa: E402
 from voleith import statements as st  # noqa: E402
-from voleith.params import TAU, K, MAX_MESSAGE_LEN, RHO_BYTES  # noqa: E402
-from voleith.vc import OPENING_BYTES  # noqa: E402
+from voleith.params import MAX_MESSAGE_LEN, RHO_BYTES, VERSION  # noqa: E402
 
 MASTER_SEED = b"voleith differential set v0.1 / 2026-10-14"
 FORMAT = "voleith-differential-1"
@@ -158,15 +157,17 @@ def sections(lay):
     the number of meaningful bits (the rest of the last byte is padding)."""
     out = [("version", 0, 1, 8), ("statement id", 1, 1, 8),
            ("iv_pre", lay.off_iv_pre, 16, 128)]
-    for i in range(TAU - 1):
+    tau = lay.split.tau
+    for i in range(tau - 1):
         out.append(("c_%d" % (i + 1), lay.off_c + i * lay.c_bytes, lay.c_bytes, lay.lhat))
     out.append(("u_tilde", lay.off_u_tilde, 32, 256))
     out.append(("d", lay.off_d, lay.d_bytes, lay.ell))
     out.append(("a_tilde", lay.off_a_tilde, 16, 128))
-    for i in range(TAU):
-        off = lay.off_open + i * OPENING_BYTES
-        out.append(("open_%d co-path seeds" % i, off, K * 16, K * 128))
-        out.append(("open_%d hidden commitment" % i, off + K * 16, 32, 256))
+    for i in range(tau):
+        off = lay.open_offsets[i]
+        k = lay.split.depths[i]
+        out.append(("open_%d co-path seeds" % i, off, k * 16, k * 128))
+        out.append(("open_%d hidden commitment" % i, off + k * 16, 32, 256))
     out.append(("chall3", lay.off_chall3, 16, 128))
     return out
 
@@ -378,7 +379,9 @@ class Mutator:
                      pub=bytes.fromhex(self.valid[b]["public_inputs"]))
         swap_names = ["iv_pre", "c_1", "c_15", "u_tilde", "d", "a_tilde", "chall3",
                       "open_3 co-path seeds", "open_12 hidden commitment"]
-        for name in swap_names + ["c_%d" % (2 + s.below(13)), "open_%d co-path seeds" % s.below(16)]:
+        tau = lay.split.tau
+        for name in swap_names + ["c_%d" % (2 + s.below(tau - 3)),
+                                  "open_%d co-path seeds" % s.below(tau)]:
             sec = [x for x in self.secs if x[0] == name][0]
             a = base()
             b = (a + 1 + s.below(nv - 1)) % nv
@@ -390,8 +393,8 @@ class Mutator:
         s = Stream(b"random bodies")
         for r in range(3):
             body = bytearray(s.bytes(total))
-            body[0] = 0x01
-            body[1] = 0x01
+            body[0] = VERSION
+            body[1] = st.STATEMENT1_ID
             for name, off, nb, nbits in self.secs:
                 if nbits % 8:
                     body[off + nb - 1] &= (1 << (nbits % 8)) - 1
