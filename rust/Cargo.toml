@@ -3,7 +3,7 @@ name = "voleith"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-description = "VOLE-in-the-head rescue proofs, SPEC.md v0.1: verifier for statement 0x01"
+description = "VOLE-in-the-head rescue proofs, SPEC.md v0.1: verifier and prover for statement 0x01"
 publish = false
 
 [lib]

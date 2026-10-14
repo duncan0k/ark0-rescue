@@ -255,7 +255,6 @@ impl Circuit {
 
     /// Evaluate in the clear. Returns every wire value, the witness bits and
     /// whether every ASSERT holds.
-    #[cfg(test)]
     pub fn evaluate(&self, public_bits: &[u8], secret_bits: &[u8]) -> (Vec<u8>, Vec<u8>, bool) {
         assert_eq!(public_bits.len(), self.n_public, "public input length");
         assert_eq!(secret_bits.len(), self.n_secret, "secret input length");
@@ -293,6 +292,63 @@ impl Circuit {
             }
         }
         (vals, witness, ok)
+    }
+
+    /// Prover terms (SPEC.md §6.2) for every constraint in order:
+    /// `sink(A0_t, A1_t)` with A0 = v_a v_b and A1 = b_a v_b + b_b v_a + v_c.
+    /// `tags[r]` is the VOLE tag v[r] of witness bit r.
+    pub fn prover_terms(
+        &self,
+        public_bits: &[u8],
+        witness_bits: &[u8],
+        tags: &[u128],
+        mut sink: impl FnMut(u128, u128),
+    ) {
+        assert_eq!(public_bits.len(), self.n_public, "public input length");
+        assert_eq!(witness_bits.len(), self.n_witness, "witness length");
+        assert!(tags.len() >= self.n_witness, "tag length");
+        let mut bits: Vec<u8> = Vec::with_capacity(self.n_wires);
+        let mut macs: Vec<u128> = Vec::with_capacity(self.n_wires);
+        bits.extend_from_slice(&[0, 1]);
+        bits.extend_from_slice(public_bits);
+        bits.extend_from_slice(&witness_bits[..self.n_secret]);
+        macs.resize(2 + self.n_public, 0);
+        macs.extend_from_slice(&tags[..self.n_secret]);
+        let mut wi = self.n_secret;
+        for op in &self.ops {
+            let (bit, mac) = match *op {
+                Op::XorSS(a, b) | Op::XorPP(a, b) => (
+                    bits[a as usize] ^ bits[b as usize],
+                    macs[a as usize] ^ macs[b as usize],
+                ),
+                Op::XorSP(s, p) => (bits[s as usize] ^ bits[p as usize], macs[s as usize]),
+                Op::NotS(a) | Op::NotP(a) => (bits[a as usize] ^ 1, macs[a as usize]),
+                Op::AndSP(s, p) => {
+                    let bp = bits[p as usize];
+                    (bits[s as usize] & bp, macs[s as usize] & mask(bp as u128))
+                }
+                Op::AndPP(a, b) => (bits[a as usize] & bits[b as usize], 0),
+                Op::Mul(a, b) => {
+                    let (ba, ma) = (bits[a as usize] as u128, macs[a as usize]);
+                    let (bb, mb) = (bits[b as usize] as u128, macs[b as usize]);
+                    let (bz, mz) = (witness_bits[wi], tags[wi]);
+                    wi += 1;
+                    sink(gf128::mul(ma, mb), (mb & mask(ba)) ^ (ma & mask(bb)) ^ mz);
+                    (bz, mz)
+                }
+                Op::Assert(a, b, c, _) => {
+                    let (ba, ma) = (bits[a as usize] as u128, macs[a as usize]);
+                    let (bb, mb) = (bits[b as usize] as u128, macs[b as usize]);
+                    sink(
+                        gf128::mul(ma, mb),
+                        (mb & mask(ba)) ^ (ma & mask(bb)) ^ macs[c as usize],
+                    );
+                    continue;
+                }
+            };
+            bits.push(bit);
+            macs.push(mac);
+        }
     }
 
     /// Verifier terms (SPEC.md §6.2, §7.3) for every constraint in order:

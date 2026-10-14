@@ -9,11 +9,13 @@
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::Shake256;
 
-/// The tag names of SPEC.md §3.2 that the verifier uses.
+/// The tag names of SPEC.md §3.2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tag {
     Mu,
+    Rnd,
     Iv,
+    Root,
     Ggm,
     Leaf,
     Exp,
@@ -31,7 +33,9 @@ impl Tag {
     fn name(self) -> &'static [u8] {
         match self {
             Tag::Mu => b"mu",
+            Tag::Rnd => b"rnd",
             Tag::Iv => b"iv",
+            Tag::Root => b"root",
             Tag::Ggm => b"ggm",
             Tag::Leaf => b"leaf",
             Tag::Exp => b"exp",

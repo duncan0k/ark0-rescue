@@ -15,6 +15,7 @@ use crate::params::{HEADER_BYTES, LAMBDA_BYTES, OPENING_BYTES, QS_MASK_BITS, TAU
 use crate::sha256;
 
 pub const STATEMENT1_ID: u8 = 0x01;
+pub const S1_WITNESS_LEN: usize = 32;
 const S1_MAX_KEY_LEN: usize = 64;
 /// Public bits: IV_in (256) | IV_out (256) | T (256) | suffix (8).
 const S1_N_PUBLIC: usize = 256 * 3 + 8;
@@ -85,6 +86,21 @@ pub fn s1_public_bits(p: &S1Public<'_>) -> Vec<u8> {
         out.push((p.suffix >> i) & 1);
     }
     out
+}
+
+/// Witness bit 8n + b is bit b of x[n].
+pub fn s1_secret_bits(x: &[u8]) -> Vec<u8> {
+    x.iter()
+        .flat_map(|&byte| (0..8).map(move |b| (byte >> b) & 1))
+        .collect()
+}
+
+/// HMAC-SHA256(K, x || suffix).
+pub fn s1_hmac(key: &[u8], suffix: u8, x: &[u8]) -> [u8; 32] {
+    let mut m = Vec::with_capacity(x.len() + 1);
+    m.extend_from_slice(x);
+    m.push(suffix);
+    sha256::hmac_sha256(key, &m)
 }
 
 /// Field sizes and offsets of a proof for one statement id (SPEC.md §10).

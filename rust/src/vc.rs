@@ -51,7 +51,6 @@ fn copath(jstar: usize, d: usize) -> usize {
 }
 
 /// Prover side: the expanded tree of one root.
-#[cfg(test)]
 pub struct Tree {
     pub hash: [u8; 32],
     nodes: Vec<Seed>,
@@ -59,7 +58,6 @@ pub struct Tree {
     coms: Vec<Com>,
 }
 
-#[cfg(test)]
 pub fn commit(root: &Seed, iv: &[u8; 16], tree: u8) -> Tree {
     let mut nodes = vec![[0u8; SEED_BYTES]; 2 * N_LEAVES];
     nodes[1] = *root;
@@ -85,7 +83,6 @@ pub fn commit(root: &Seed, iv: &[u8; 16], tree: u8) -> Tree {
     }
 }
 
-#[cfg(test)]
 impl Tree {
     /// The opening for hidden leaf j*: co-path seeds top-down, then com_{j*}.
     pub fn open(&self, jstar: usize) -> [u8; OPENING_BYTES] {

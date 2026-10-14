@@ -1,11 +1,11 @@
-//! Verifier (SPEC.md §6, §8–§11).
+//! Prover and verifier (SPEC.md §6, §8–§11).
 
 #![forbid(unsafe_code)]
 
 use crate::bits;
 use crate::gf128::{self, FixedMul};
 use crate::params::{
-    K, LAMBDA, LAMBDA_BYTES, MAX_MESSAGE_LEN, N_LEAVES, OPENING_BYTES, TAU, VERSION,
+    K, LAMBDA, LAMBDA_BYTES, MAX_MESSAGE_LEN, N_LEAVES, OPENING_BYTES, RHO_BYTES, TAU, VERSION,
 };
 use crate::statements::{self, Layout, StatementDef};
 use crate::sym::{Tag, Xof};
@@ -272,4 +272,196 @@ fn verify_core(
         diff |= a ^ b;
     }
     diff == 0
+}
+
+// ------------------------------------------------------------------ prover
+
+/// Why `prove` refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProveError {
+    UnknownStatement,
+    MalformedPublicInputs,
+    MessageTooLong,
+    BadWitnessLength,
+    RelationFails,
+}
+
+/// Prover-side values, for comparison with the vectors' intermediates.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProverTrace {
+    pub mu: [u8; 32],
+    pub r: [u8; 16],
+    pub iv_pre: [u8; 16],
+    pub iv: [u8; 16],
+    pub roots: Vec<u8>,
+    pub tree_hashes: Vec<[u8; 32]>,
+    pub hcom: [u8; 32],
+    pub chall1: [u8; 32],
+    pub u_tilde: [u8; 32],
+    pub h_v: [u8; 32],
+    pub chall2: Vec<u8>,
+    pub a_tilde: [u8; 16],
+    pub b_tilde: [u8; 16],
+    pub chall3: [u8; 16],
+}
+
+/// Proof of knowledge of `witness` for the statement, bound to `message`
+/// (SPEC.md §9). `rho` is the 32 bytes of hedging randomness (the output of
+/// the single rng(32) call of the reference); it must be fresh and secret for
+/// real use.
+///
+/// This prover is for tests and tools: it is not constant time and does not
+/// zeroize its secrets.
+pub fn prove(
+    statement_id: u8,
+    public_inputs: &[u8],
+    witness: &[u8],
+    message: &[u8],
+    rho: &[u8; RHO_BYTES],
+) -> Result<(Vec<u8>, ProverTrace), ProveError> {
+    let def = statements::lookup(statement_id).ok_or(ProveError::UnknownStatement)?;
+    let parsed =
+        statements::s1_parse_public(public_inputs).ok_or(ProveError::MalformedPublicInputs)?;
+    if message.len() > MAX_MESSAGE_LEN {
+        return Err(ProveError::MessageTooLong);
+    }
+    if witness.len() != statements::S1_WITNESS_LEN {
+        return Err(ProveError::BadWitnessLength);
+    }
+    if &statements::s1_hmac(parsed.key, parsed.suffix, witness) != parsed.y {
+        return Err(ProveError::RelationFails);
+    }
+    let lay = &def.layout;
+    let circ = &def.circuit;
+    let (ell, lhat, cb) = (lay.ell, lay.lhat, lay.c_bytes);
+    let public_bits = statements::s1_public_bits(&parsed);
+    let (_, w_bits, ok) = circ.evaluate(&public_bits, &statements::s1_secret_bits(witness));
+    if !ok {
+        return Err(ProveError::RelationFails);
+    }
+
+    // Phase 1: randomness, IV, VOLE commitment, chall1.
+    let mu = compute_mu(statement_id, public_inputs, message);
+    let rnd: [u8; 32] = Xof::new(Tag::Rnd)
+        .update(&(witness.len() as u16).to_le_bytes())
+        .update(witness)
+        .update(&mu)
+        .update(rho)
+        .finalize();
+    let r = arr16(&rnd[..16]);
+    let iv_pre = arr16(&rnd[16..]);
+    let iv: [u8; 16] = Xof::new(Tag::Iv).update(&iv_pre).update(&mu).finalize();
+    let roots: [u8; TAU * 16] = Xof::new(Tag::Root).update(&iv).update(&r).finalize();
+
+    let mut trees = Vec::with_capacity(TAU);
+    let mut v_cols = vec![0u8; LAMBDA * cb];
+    let mut us = vec![vec![0u8; cb]; TAU];
+    let mut scratch = ConvertScratch::new(cb);
+    for i in 0..TAU {
+        let tree = vc::commit(&arr16(&roots[16 * i..16 * i + 16]), &iv, i as u8);
+        let tree_cols = &mut v_cols[K * i * cb..K * (i + 1) * cb];
+        let mut col_refs: Vec<&mut [u8]> = tree_cols.chunks_exact_mut(cb).collect();
+        vole::convert(
+            &mut scratch,
+            &mut col_refs,
+            Some(us[i].as_mut_slice()),
+            |j, buf| {
+                vole::expand_leaf(&tree.sds[j], &iv, i as u8, j, lhat, buf);
+            },
+        );
+        trees.push(tree);
+    }
+    let u = us[0].clone();
+    let mut c_all = Vec::with_capacity((TAU - 1) * cb);
+    for u_i in &us[1..] {
+        c_all.extend(u.iter().zip(u_i.iter()).map(|(a, b)| a ^ b));
+    }
+    let mut hh = Xof::new(Tag::Hcom);
+    for t in &trees {
+        hh.absorb(&t.hash);
+    }
+    let hcom: [u8; 32] = hh.finalize();
+    let chall1: [u8; 32] = Xof::new(Tag::Ch1)
+        .update(&mu)
+        .update(&hcom)
+        .update(&c_all)
+        .update(&iv_pre)
+        .finalize();
+
+    // Phase 2: VOLE consistency hash and witness commitment, chall2.
+    let vh = VoleHash::new(&chall1, ell);
+    let u_tilde = vh.hash(&u);
+    let mut hv = Xof::new(Tag::Hv);
+    for col in v_cols.chunks_exact(cb) {
+        hv.absorb(&vh.hash(col));
+    }
+    let h_v: [u8; 32] = hv.finalize();
+    let mut d_enc = vec![0u8; lay.d_bytes];
+    for (k, byte) in d_enc.iter_mut().enumerate() {
+        let mut w = 0u8;
+        for b in 0..8 {
+            if let Some(&bit) = w_bits.get(8 * k + b) {
+                w |= bit << b;
+            }
+        }
+        *byte = w ^ u[k];
+    }
+    bits::clear_padding(&mut d_enc, ell);
+    let chall2: [u8; 64] = Xof::new(Tag::Ch2)
+        .update(&chall1)
+        .update(&u_tilde)
+        .update(&h_v)
+        .update(&d_enc)
+        .finalize();
+
+    // Phase 3: QuickSilver, chall3.
+    let rows = vole::columns_to_rows(&v_cols, cb, ell + LAMBDA);
+    let zk = ZkHash::new(&chall2);
+    let mut acc0 = ZkAcc::default();
+    let mut acc1 = ZkAcc::default();
+    circ.prover_terms(&public_bits, &w_bits, &rows[..ell], |a0, a1| {
+        zk.absorb(&mut acc0, a0);
+        zk.absorb(&mut acc1, a1);
+    });
+    let u_star = bits::load_bits(&u, ell, LAMBDA);
+    let v_star = mask_element(&rows[ell..]);
+    let a_tilde = gf128::to_bytes(zk.finish(&acc1, u_star));
+    let b_tilde = gf128::to_bytes(zk.finish(&acc0, v_star));
+    let chall3: [u8; 16] = Xof::new(Tag::Ch3)
+        .update(&chall2)
+        .update(&a_tilde)
+        .update(&b_tilde)
+        .finalize();
+
+    // Phase 4: open all but one leaf per tree; assemble.
+    let mut proof = Vec::with_capacity(lay.total);
+    proof.extend_from_slice(&[VERSION, statement_id]);
+    proof.extend_from_slice(&iv_pre);
+    proof.extend_from_slice(&c_all);
+    proof.extend_from_slice(&u_tilde);
+    proof.extend_from_slice(&d_enc);
+    proof.extend_from_slice(&a_tilde);
+    for (i, t) in trees.iter().enumerate() {
+        proof.extend_from_slice(&t.open(chall3[i] as usize));
+    }
+    proof.extend_from_slice(&chall3);
+    debug_assert_eq!(proof.len(), lay.total);
+
+    let trace = ProverTrace {
+        mu,
+        r,
+        iv_pre,
+        iv,
+        roots: roots.to_vec(),
+        tree_hashes: trees.iter().map(|t| t.hash).collect(),
+        hcom,
+        chall1,
+        u_tilde,
+        h_v,
+        chall2: chall2.to_vec(),
+        a_tilde,
+        b_tilde,
+        chall3,
+    };
+    Ok((proof, trace))
 }

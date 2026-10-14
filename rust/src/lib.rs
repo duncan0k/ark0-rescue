@@ -2,7 +2,8 @@
 //!
 //! The verifier follows SPEC.md §11: every length and format check happens
 //! before any parsing of proof contents or hashing, and any failure is a
-//! rejection.
+//! rejection. The prover reproduces the Python reference byte for byte for
+//! the same randomness; it is not constant time and is meant for testing.
 //!
 //! Unsafe code is forbidden in every module except [`ffi`], the C ABI shim.
 
@@ -23,7 +24,9 @@ mod unihash;
 mod vc;
 mod vole;
 
-pub use proof::{proof_length, verify, verify_traced, VerifierTrace};
+pub use proof::{
+    proof_length, prove, verify, verify_traced, ProveError, ProverTrace, VerifierTrace,
+};
 pub use statements::{s1_encode_public, STATEMENT1_ID};
 
 /// Facts about a statement's circuit, for tests and tools.
