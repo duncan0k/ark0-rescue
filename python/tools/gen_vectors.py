@@ -1,4 +1,4 @@
-"""Generate vectors/statement1-v0.1.json (fixed-rng known-answer vectors).
+"""Generate vectors/statement1-v0.2.json (fixed-rng known-answer vectors).
 
 Usage: python -I python/tools/gen_vectors.py [output path]
 
@@ -129,13 +129,15 @@ def negative_vectors(base, lay):
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        HERE, "..", "..", "vectors", "statement1-v0.1.json")
+        HERE, "..", "..", "vectors", "statement1-v0.2.json")
     circ = st.REGISTRY[st.STATEMENT1_ID].circuit()
     lay = P.layout(st.STATEMENT1_ID)
     doc = {
-        "spec": "SPEC.md v0.1",
+        "spec": "SPEC.md v0.2",
         "protocol_version_byte": params.VERSION,
-        "params": {"lambda": params.LAMBDA, "tau": params.SPLIT.tau, "k": params.SPLIT.k0,
+        "params": {"lambda": params.LAMBDA, "tau": params.SPLIT.tau,
+                   "tau0": params.SPLIT.tau0, "k0": params.SPLIT.k0,
+                   "tau1": params.SPLIT.tau1, "k1": params.SPLIT.k1,
                    "rho_bytes": params.RHO_BYTES},
         "statement_id": st.STATEMENT1_ID,
         "circuit": {

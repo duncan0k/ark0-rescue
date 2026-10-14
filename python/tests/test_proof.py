@@ -7,7 +7,7 @@ import unittest
 import voleith
 from voleith import proof as P
 from voleith import statements as st
-from voleith.params import LAMBDA, MAX_MESSAGE_LEN, SPLIT
+from voleith.params import LAMBDA, MAX_MESSAGE_LEN, SPLIT, VERSION
 from voleith import vc
 
 WALLET_KEY = b"ark0-wallet v1 schnorr"
@@ -125,7 +125,8 @@ class TestProofEndToEnd(unittest.TestCase):
     def test_header(self):
         self.assertRejects(self.stmt, self.msg, flip(self.proof, 0), "version")
         self.assertRejects(self.stmt, self.msg, flip(self.proof, 1), "statement id byte")
-        self.assertRejects(self.stmt, self.msg, bytes([0x02]) + self.proof[1:], "version 2")
+        self.assertRejects(self.stmt, self.msg, bytes([0x01]) + self.proof[1:], "version 1")
+        self.assertRejects(self.stmt, self.msg, bytes([0x03]) + self.proof[1:], "version 3")
 
     def test_nonzero_padding_bits(self):
         lay = self.lay
@@ -151,7 +152,7 @@ class TestProofEndToEnd(unittest.TestCase):
     def test_garbage_of_correct_length(self):
         rnd = random.Random(33)
         body = rnd.randbytes(PROOF_LEN - 2)
-        self.assertRejects(self.stmt, self.msg, bytes([1, 1]) + body)
+        self.assertRejects(self.stmt, self.msg, bytes([VERSION, 1]) + body)
         self.assertRejects(self.stmt, self.msg, bytes(PROOF_LEN))
 
     # ------------------------------------------------- statement and message

@@ -1,13 +1,13 @@
-"""Protocol constants for VOLEitH rescue proofs, version 0.1 (see SPEC.md §2).
+"""Protocol constants for VOLEitH rescue proofs, version 0.2 (see SPEC.md §2).
 
 Everything here is fixed by the protocol version; nothing is negotiable at
 run time.
 """
 
 # Protocol version byte carried in the proof header and hashed into mu.
-VERSION = 0x01
+VERSION = 0x02
 # ASCII version label used inside every domain-separation tag.
-VERSION_LABEL = "v0.1"
+VERSION_LABEL = "v0.2"
 
 # Security parameter and field size: GF(2^128).
 LAMBDA = 128
@@ -63,8 +63,8 @@ class TreeSplit:
                                                      self.tau1, self.k1)
 
 
-# The parameter set of this version: 16 trees of depth 8.
-SPLIT = TreeSplit(16)
+# The parameter set of this version: 24 trees, 8 of depth 6 and 16 of depth 5.
+SPLIT = TreeSplit(24)
 
 # Extra VOLE rows appended after the witness rows:
 #   QS_MASK_BITS rows mask the QuickSilver response (one GF(2^128) element),

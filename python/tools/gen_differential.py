@@ -1,4 +1,4 @@
-"""Generate vectors/statement1-v0.1-differential.json, the bulk differential set.
+"""Generate vectors/statement1-v0.2-differential.json, the bulk differential set.
 
 Usage: python -I python/tools/gen_differential.py [--valid N] [--jobs J] [output]
 
@@ -48,7 +48,7 @@ from voleith import proof as P  # noqa: E402
 from voleith import statements as st  # noqa: E402
 from voleith.params import MAX_MESSAGE_LEN, RHO_BYTES, VERSION  # noqa: E402
 
-MASTER_SEED = b"voleith differential set v0.1 / 2026-10-14"
+MASTER_SEED = b"voleith differential set v0.2 / 2026-10-14"
 FORMAT = "voleith-differential-1"
 
 
@@ -237,11 +237,13 @@ class Mutator:
                 e = self.flip_in(s, name, off, nb, nbits)
                 self.add("flip", "bit flip in %s (byte %d)" % (name, e["offset"]), base(), [e])
         # Header bytes set to other values.
-        for val in (0x00, 0x02, 0x80, 0xFF):
-            self.add("header", "version byte set to 0x%02x" % val, base(),
-                     [{"op": "set", "offset": 0, "data": "%02x" % val}])
-            self.add("header", "statement id byte set to 0x%02x" % val, base(),
-                     [{"op": "set", "offset": 1, "data": "%02x" % val}])
+        for val in (0x00, 0x01, 0x02, 0x80, 0xFF):
+            if val != VERSION:
+                self.add("header", "version byte set to 0x%02x" % val, base(),
+                         [{"op": "set", "offset": 0, "data": "%02x" % val}])
+            if val != st.STATEMENT1_ID:
+                self.add("header", "statement id byte set to 0x%02x" % val, base(),
+                         [{"op": "set", "offset": 1, "data": "%02x" % val}])
         # Padding bits (lhat and ell are 7 mod 8: one padding bit each).
         for name, off, nb, nbits in self.secs:
             if nbits % 8:
@@ -435,7 +437,7 @@ def main():
     ap.add_argument("--random-flips", type=int, default=60)
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     ap.add_argument("output", nargs="?", default=os.path.join(
-        HERE, "..", "..", "vectors", "statement1-v0.1-differential.json"))
+        HERE, "..", "..", "vectors", "statement1-v0.2-differential.json"))
     args = ap.parse_args()
 
     lay = P.layout(st.STATEMENT1_ID)
@@ -464,7 +466,7 @@ def main():
         kinds[c["kind"]] = kinds.get(c["kind"], 0) + 1
     doc = {
         "format": FORMAT,
-        "spec": "SPEC.md v0.1",
+        "spec": "SPEC.md v0.2",
         "statement_id": st.STATEMENT1_ID,
         "proof_len": lay.total,
         "generator": "python/tools/gen_differential.py",

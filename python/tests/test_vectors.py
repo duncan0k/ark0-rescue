@@ -1,4 +1,4 @@
-"""The fixed-rng known-answer vectors in vectors/statement1-v0.1.json."""
+"""The fixed-rng known-answer vectors in vectors/statement1-v0.2.json."""
 
 import hashlib
 import json
@@ -6,11 +6,12 @@ import os
 import unittest
 
 import voleith
+from voleith import params
 from voleith import proof as P
 from voleith import statements as st
 
 VECTORS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "..", "..", "vectors", "statement1-v0.1.json")
+                       "..", "..", "vectors", "statement1-v0.2.json")
 
 
 class TestVectors(unittest.TestCase):
@@ -25,6 +26,11 @@ class TestVectors(unittest.TestCase):
         self.assertEqual(d["circuit"]["sha256_of_serialization"], circ.digest())
         self.assertEqual(d["circuit"]["n_witness"], circ.n_witness)
         self.assertEqual(d["proof_len"], voleith.proof_length(st.STATEMENT1_ID))
+        self.assertEqual(d["protocol_version_byte"], params.VERSION)
+        s = params.SPLIT
+        self.assertEqual((d["params"]["tau"], d["params"]["tau0"], d["params"]["k0"],
+                          d["params"]["tau1"], d["params"]["k1"]),
+                         (s.tau, s.tau0, s.k0, s.tau1, s.k1))
         self.assertGreaterEqual(len(d["vectors"]), 3)
 
     def test_vectors_reproduce_and_verify(self):
