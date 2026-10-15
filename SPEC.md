@@ -1,6 +1,6 @@
-# VOLEitH rescue proofs: specification v0.2, revision 1
+# VOLEitH rescue proofs: specification v0.2, revision 2
 
-Status: **draft for review, not frozen**. v0.2, revision 1 (2026-10-14).
+Status: **draft for review, not frozen**. v0.2, revision 2 (2026-10-15).
 Nothing here has had an external cryptographic review. v0.2 replaces v0.1,
 which was never deployed: the construction is the same, but the 128
 challenge bits are spread over 24 GGM trees of mixed depth (8 trees of depth
@@ -23,6 +23,18 @@ construction defect, and asked for the same preconditions and for the
 bookkeeping and lemmas of §13 before v0.2 is frozen. NOTES.md, "2026-10-14
 internal reviews", lists every finding and what was done about it. No
 external review has been done.
+
+Revision 2 changes wording only. The version byte, tags, parameters, proof
+format and both vector files of revision 1 are unchanged. It resolves 18
+issues found by a clean-room implementation: a Go verifier written from
+revision 1 and the vectors alone, which agrees with every vector
+(`go/SPEC-ISSUES.md` on branch `cleanroom/go-verifier`). The vectors
+contradicted none of the 18; each was an ambiguity, a gap or an internal
+inconsistency of the text. Revision 2 adds a byte grammar and one emission
+order for the circuit (§7.4, §7.6), per-gadget test circuits
+(`vectors/gadgets-v0.2.json`), the verifier interface and what steps 1–6 may
+read (§11), a symbol table (§1.1) and a description of the vector files
+(Appendix A). §16 lists every change.
 
 This document specifies a non-interactive zero-knowledge proof of knowledge,
 used as a signature of knowledge on a public message, for the signet rescue
@@ -1246,6 +1258,23 @@ either change would need a new version:
   (consensus preconditions), §13 (assumptions, missing terms, lemma
   sketches, the quantum risk decision), §14 and §15. The version byte, the
   tags, the parameters, the proof format and the vectors are unchanged.
+- Revision 2 of v0.2 (2026-10-15) changes wording only, after a clean-room
+  implementation. A Go verifier written from revision 1 and the vectors
+  alone agrees with every vector and reproduces both circuit digests. Its
+  author listed 18 issues in the text (`go/SPEC-ISSUES.md`, branch
+  `cleanroom/go-verifier`); the vectors contradicted none of them. Revision 2
+  states what the vectors and the reference already fixed: §1 (normative
+  sources, symbol table), §1.2 (the first `n` bits of a hash output are
+  masked, not checked), §3.2–§3.3 and §8 (one notation for hash inputs),
+  §5.3 (bit order of `Δ` and `δ_i`), §6.3 (the two Horner forms), §7.2 (only
+  ids 0 and 1 fold; NOT is emitted), §7.4 (one emission-order rule,
+  `add_multi`'s fold, PUB instructions emitted, the standalone circuit's
+  inputs), §7.6 (byte grammar, per-gadget circuits), §11 (the interface,
+  what steps 1–6 read), §12.1 (consensus checks are not in `verify`) and
+  Appendix A (vector files). Two symbols were renamed: the hash tag (§3.1)
+  and `compress`'s asserted state `F` (§7.4). The version byte, the tags,
+  the parameters, the proof format and both vector files of revision 1 are
+  unchanged; `vectors/gadgets-v0.2.json` is new.
 - v0.2 is a review draft. After review, a frozen version is published with new
   vectors.
 
