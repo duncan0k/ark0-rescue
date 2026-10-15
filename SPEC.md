@@ -1,6 +1,6 @@
-# VOLEitH rescue proofs: specification v0.2, revision 1
+# VOLEitH rescue proofs: specification v0.2, revision 2
 
-Status: **draft for review, not frozen**. v0.2, revision 1 (2026-10-14).
+Status: **draft for review, not frozen**. v0.2, revision 2 (2026-10-15).
 Nothing here has had an external cryptographic review. v0.2 replaces v0.1,
 which was never deployed: the construction is the same, but the 128
 challenge bits are spread over 24 GGM trees of mixed depth (8 trees of depth
@@ -24,6 +24,18 @@ bookkeeping and lemmas of §13 before v0.2 is frozen. NOTES.md, "2026-10-14
 internal reviews", lists every finding and what was done about it. No
 external review has been done.
 
+Revision 2 changes wording only. The version byte, tags, parameters, proof
+format and both vector files of revision 1 are unchanged. It resolves 18
+issues found by a clean-room implementation: a Go verifier written from
+revision 1 and the vectors alone, which agrees with every vector
+(`go/SPEC-ISSUES.md` on branch `cleanroom/go-verifier`). The vectors
+contradicted none of the 18; each was an ambiguity, a gap or an internal
+inconsistency of the text. Revision 2 adds a byte grammar and one emission
+order for the circuit (§7.4, §7.6), per-gadget test circuits
+(`vectors/gadgets-v0.2.json`), the verifier interface and what steps 1–6 may
+read (§11), a symbol table (§1.1) and a description of the vector files
+(Appendix A). §16 lists every change.
+
 This document specifies a non-interactive zero-knowledge proof of knowledge,
 used as a signature of knowledge on a public message, for the signet rescue
 lane. It follows the FAEST v1.1 VOLE-in-the-head (VOLEitH) skeleton with the
@@ -33,9 +45,12 @@ Boolean constraint layer, and defines one statement:
 > **Statement 0x01.** The prover knows a 32-byte seed `x` such that
 > `HMAC-SHA256(K, x ‖ suffix) = y`, for public `K`, `suffix` and `y`.
 
-The Python package in `python/voleith` is the executable form of this
-specification. Where this text and the code disagree, that is a bug in one of
-them; `vectors/statement1-v0.2.json` pins the intended behaviour.
+This text and the vector files of Appendix A define the protocol. An
+implementation needs nothing else. The Python package in `python/voleith` is
+the reference implementation. Where this text and the reference disagree,
+that is a bug in one of them, and the vectors pin the intended behaviour.
+References to `NOTES.md` (measurements, history) and to code are informative;
+no conformance requirement depends on them.
 
 Sources: the approved plan `R1-voleith-plan.md`, the rescue-lane interface in
 `m4-design-2026-10-14.md` §11 and the owner decisions in `m4-plan-2026-10-14.md`
@@ -62,6 +77,8 @@ references are listed in §17.
 16. Versioning
 17. References
 
+Appendix A. Vector files
+
 ## 1. Conventions
 
 ### 1.1 Notation
@@ -75,16 +92,35 @@ references are listed in §17.
 - `ℓ` is the number of witness bits of a statement and `ℓ̂ = ℓ + 3λ` the VOLE
   length (§5).
 
+Some letters have more than one meaning; the section in which a symbol
+appears fixes its meaning:
+
+| symbol | meanings |
+|---|---|
+| `s`, `t` | VH keys from `chall1` (§5.4); ZKH keys from `chall2` (§6.3). `t` is also the constraint index (§6.2, §7.2) and the schedule and round index of `compress` (§7.4) |
+| `r` | root seed (§8); row index (§5.3). `r_i` are tree roots (§4.1), `r_{i,j}` leaf expansions (§5.1), `r0`, `r1` ZKH keys (§6.3) |
+| `c` | `c_i` VOLE corrections (§5.3); third wire of a constraint `a·b = c` (§6.2); `c[i]` carries (§7.4); a state word of `compress` (§7.4) |
+| `d` | masked witness (§6.1); GGM depth index (§4.3); a state word of `compress` (§7.4); Schnorr secret key (§12.1) |
+| `w` | extended witness (§6.1, §7.2); a wire in `β_w`, `v_w`, `q_w` (§6.2); a word index (§7.4, §7.5) |
+| `C` | number of constraints (§6.3, §7.2); `C(τ,2)` is a binomial coefficient (§5.4, §13.2) |
+| `S` | number of secret inputs (§7.1); a set of trees (§13.2) |
+| `P` | number of public inputs (§7.1); the x-only output key (§12.1); a number of machines (§13.6) |
+| `Q` | verifier's VOLE columns `Q_j` (§5.3); random-oracle query counts (§13.2) |
+| `K` | HMAC key (§7.5); `K_t` SHA-256 round constants (§7.4) |
+| `m` | the message (§3.2, §8, §11); the index of a MUL in `w[S+m]` (§7.2) |
+| `n` | a length in bits (§1.2); a GGM node index (§3.2, §4); a rotation (§7.4); the instruction count (§7.6); the secp256k1 group order (§12.1) |
+
 ### 1.2 Bit strings
 
 A bit string `b[0..n)` is identified with the non-negative integer
 `Σ b[i]·2^i`. Its byte encoding `enc_n(b)` has `⌈n/8⌉` bytes; bit `i` is bit
 `i mod 8` (least significant first) of byte `⌊i/8⌋`. If `n` is not a multiple of
 8, the unused high bits of the last byte are **padding bits and must be zero**;
-a decoder rejects any non-zero padding bit.
+a decoder of a proof field rejects any non-zero padding bit (§11 step 6).
 
-Taking "the first `n` bits" of a byte string means decoding it with this rule
-and discarding bits at positions `≥ n`.
+Taking "the first `n` bits" of a hash output means reading it in this bit
+order and discarding the bits at positions `≥ n`. No padding check applies
+to a hash output.
 
 ### 1.3 The field GF(2^128)
 
@@ -124,11 +160,11 @@ split"). v0.1 used R1's `τ = 16`, `k = 8`; no grinding in either. For statement
 Every hash, PRG and random-oracle call is
 
 ```
-SHAKE256[name](data, L) = SHAKE256( u8(|T|) ‖ T ‖ data , L bytes ),
-T = ASCII "VOLEitH-rescue/v0.2/" ‖ name
+SHAKE256[name](data, L) = SHAKE256( u8(|tag|) ‖ tag ‖ data , L bytes ),
+tag = ASCII "VOLEitH-rescue/v0.2/" ‖ name
 ```
 
-The tag `T` contains the protocol version, so a new version changes every call.
+The tag contains the protocol version, so a new version changes every call.
 Within one name, `data` is a concatenation of fields whose lengths are fixed by
 the protocol and the statement id, or that carry an explicit length prefix, so
 each input encoding is injective.
@@ -149,10 +185,12 @@ each input encoding is injective.
 | `ch1` | `μ ‖ hcom ‖ enc(c_1) ‖ … ‖ enc(c_23) ‖ iv_pre` | 32 | `chall1` (`H_2^1`) |
 | `hv` | `Ṽ_0 ‖ … ‖ Ṽ_127` | 32 | `h_V` (`H_1`) |
 | `ch2` | `chall1 ‖ ũ ‖ h_V ‖ enc(d)` | 64 | `chall2` (`H_2^2`) |
-| `ch3` | `chall2 ‖ ã ‖ b̃` | 16 | `chall3` (`H_2^3`) |
+| `ch3` | `chall2 ‖ ã ‖ enc(b̃)` | 16 | `chall3` (`H_2^3`) |
 
 `sid` is the statement id, `pub` the canonical public inputs, `m` the message,
-`x` the witness. Seeds and IVs are 16 bytes.
+`x` the witness. Seeds and IVs are 16 bytes. A field the proof carries
+(`iv_pre`, `enc(c_i)`, `ũ`, `enc(d)`, `ã`) is hashed as its bytes in the
+proof. `enc(b̃)` is the 16-byte encoding (§1.3) of the field element `b̃`.
 
 ### 3.3 Why SHAKE256 everywhere, and no AES
 
@@ -165,7 +203,7 @@ each input encoding is injective.
 - The inputs carry the position, which gives the effect of FAEST v3's tweaked
   PRG: within a proof, no two `ggm`, `leaf` or `exp` calls with the same tag
   share the non-secret prefix `iv ‖ u8(i) ‖ u16le(n)` (a `leaf` and an `exp` call
-  on the same leaf differ only by tag), the single `root` call has its own tag,
+  on the same leaf share this prefix but not the tag), the single `root` call has its own tag,
   and `iv` separates proofs. A seed guess therefore tests one target.
 - **Cost.** The verifier expands `Σ_i (N_i − 1) = 1,000` leaves of
   `⌈ℓ̂/8⌉ = 5,307` bytes, about 5.3 MB of SHAKE256 output for statement 0x01
@@ -245,8 +283,9 @@ computing these sums (e.g. FAEST's divide-and-conquer) is conforming.
 
 ### 5.3 Corrections and the combined VOLE
 
-`Δ ∈ GF(2^128)` is `chall3` (§8) read as a field element; `Δ_j` denotes its
-bit `j`. **Challenge decoding** (FAEST's ChalDec): tree `i` uses the `k_i` bits of
+`Δ ∈ GF(2^128)` is `chall3` (§8) read as a field element (§1.3); `Δ_j` denotes
+its bit `j`, the coefficient of `X^j`, which is bit `j mod 8` of byte `⌊j/8⌋` of
+`chall3`. **Challenge decoding** (FAEST's ChalDec): tree `i` uses the `k_i` bits of
 `Δ` starting at
 
 ```
@@ -254,7 +293,8 @@ o_i = Σ_{i' < i} k_{i'} = k0·i                    if i < τ0
                         = k0·τ0 + k1·(i − τ0)     otherwise
 ```
 
-and its index is `δ_i = Σ_{b < k_i} Δ_{o_i+b}·2^b`, so `bit_b(δ_i) = Δ_{o_i+b}`. The
+and its index is `δ_i = Σ_{b < k_i} Δ_{o_i+b}·2^b`, so `bit_b(δ_i) = Δ_{o_i+b}` and
+`Δ_{o_i}` is the least significant bit of `δ_i`. The
 ranges `[o_i, o_i + k_i)` partition `[0, 128)`. The hidden leaf of tree `i` is
 `j* = δ_i`. For `τ = 24`, tree `i < 8` uses bits `[6i, 6i + 6)` and tree `i ≥ 8`
 uses bits `[48 + 5(i − 8), 53 + 5(i − 8))`.
@@ -353,8 +393,12 @@ For field elements `x_0..x_{C−1}` and a mask `z`:
 
 ```
 ZKH(x; z) = r0·Σ_{i<C} s^(C−1−i)·x_i ⊕ r1·Σ_{i<C} t^(C−1−i)·x_i ⊕ z
-            (Horner: h = 0; for each i: h = h·s ⊕ x_i)
+            (Horner: h = h' = 0; for i = 0..C−1: h = h·s ⊕ x_i, h' = h'·t ⊕ x_i;
+             then ZKH = r0·h ⊕ r1·h' ⊕ z)
 ```
+
+ZKH's Horner step multiplies before it adds, so `x_{C−1}` has exponent 0. VH's
+step (§5.4) adds before it multiplies, so every exponent is ≥ 1.
 
 This is FAEST v1.1's ZKHash with `t` a full field element instead of a 64-bit
 one: `ε_zk ≤ 2^−128 + ((C−1)/2^128)^2` [FAEST v1.1 Lemma 2 with Prop. 2–3]. For
@@ -394,13 +438,14 @@ ids 0 and 1):
 
 | call | rule |
 |---|---|
-| `XOR(a,b)` | both constant: return `a⊕b`. Exactly one constant `κ`, other wire `w`: return `w` if `κ = 0`, else `NOT(w)`. Otherwise emit `XOR(a,b)`. |
+| `XOR(a,b)` | both constant: return `a⊕b`. Exactly one constant `κ`, other wire `w`: return `w` if `κ = 0`, else return the result of the call `NOT(w)` below, which emits a NOT instruction (never `XOR(w,1)`). Otherwise emit `XOR(a,b)`. |
 | `AND(a,b)` | both constant: return `a∧b`. Exactly one constant `κ`, other `w`: return `w` if `κ = 1`, else constant 0. Otherwise emit `AND(a,b)`. |
 | `NOT(a)` | constant: return `1−a`. Otherwise emit `NOT(a)`. |
 | `ASSERT(a,b,c)` | always emitted; no wire. |
 
-Operands are recorded in the order of the call. Only constant wires are folded,
-so **the instruction list depends only on the kinds of wires, never on public
+Operands are recorded in the order of the call. Only the wire ids 0 and 1 are
+folded; a call on PUB wires is emitted, although its value is public. So **the
+instruction list depends only on the kinds of wires, never on public
 values**; the witness layout and proof length are fixed per statement id.
 
 - An emitted AND whose two inputs are SEC ("MUL") is the only non-linear gate:
@@ -429,9 +474,31 @@ All constraints have degree 2 (the E1 encoding of R1).
 
 ### 7.4 SHA-256 gadgets
 
-A word is a list of 32 wires, least significant bit first. Word gadgets emit
-their instructions bit by bit in ascending bit order; nested calls evaluate
-their arguments left to right.
+A word is a list of 32 wires, least significant bit first. `const_word`,
+`rotr` and `shr` only select wires and emit nothing.
+
+**Emission order.** Read the pseudo-code below as a sequential program; the
+builder emits instructions in the order in which it makes the builder calls
+of §7.2:
+
+1. Statements and loops run in the order written, each loop over its range
+   in ascending order.
+2. A gadget defined per bit (`[i] = …`) is a loop over `i` from 0 to 31.
+3. The arguments of a call are evaluated left to right, each completely,
+   before the call itself.
+
+A call that folds (§7.2) emits nothing. For example:
+
+- The inner `xor_w` of `Σ0` emits all 32 XORs before the outer `xor_w`
+  emits any.
+- `Ch` makes the calls `XOR(f[i],g[i])`, `AND` and the outer `XOR` of bit
+  `i` before any call of bit `i+1`.
+- `add` makes, for bit `i`, the two XOR calls of `s[i]` and then the four
+  calls of the next carry.
+- `assert_add` makes the calls of all 32 `c[i]`, then `ASSERT(c[0], 1, 0)`,
+  then three XOR calls and one ASSERT per bit.
+- `compress` emits the whole message schedule before round 0, and within
+  `W[t]` all of `σ1(W[t−2])` before `σ0(W[t−15])`.
 
 ```
 const_word(v)[i] = wire (v >> i) & 1
@@ -458,7 +525,10 @@ add(x, y):                      # ripple carry, one AND per carry bit
 add_multi(words):
     order the words stably: those with no SEC wire first, then those with a SEC wire;
     drop words whose 32 wires are all constant 0;
-    if none remain, return const_word(0); otherwise fold left with add.
+    if none remain, return const_word(0)
+    acc = the first remaining word                 # one word: returned, nothing emitted
+    for each further remaining word v, in order: acc = add(acc, v)
+    return acc
 
 assert_add(x, y, z):            # x + y = z (mod 2^32), z without SEC wires
     for i in 0..31: c[i] = XOR(XOR(x[i], y[i]), z[i])
@@ -473,7 +543,7 @@ uses the implied carries `c_i = x_i ⊕ y_i ⊕ z_i` and costs no witness bits
 (§7.7).
 
 ```
-compress(H, W, S = none):       # H: 8 words, W: 16 words, S: optional 8 non-SEC words
+compress(H, W, F = none):       # H: 8 words, W: 16 words, F: optional 8 non-SEC words
     for t in 16..63:
         W[t] = add_multi([σ1(W[t-2]), W[t-7], σ0(W[t-15]), W[t-16]])
     (a,b,c,d,e,f,g,h) = H
@@ -482,25 +552,28 @@ compress(H, W, S = none):       # H: 8 words, W: 16 words, S: optional 8 non-SEC
         T1 = add_multi([h, s1, ch, const_word(K_t), W[t]])
         s0 = Σ0(a);  mj = Maj(a,b,c)
         T2 = add_multi([s0, mj])
-        if S given and t ≥ 60:
-            e' = S[4 + 63 − t];  a' = S[63 − t]
+        if F given and t ≥ 60:
+            e' = F[4 + 63 − t];  a' = F[63 − t]
             assert_add(d, T1, e');  assert_add(T1, T2, a')
         else:
             e' = add_multi([d, T1]);  a' = add_multi([T1, T2])
         (h,g,f,e,d,c,b,a) = (g,f,e,e',c,b,a,a')
-    if S given: return nothing
+    if F given: return nothing
     return [add_multi([H[w], state[w]]) for w in 0..7]      # state = (a,b,c,d,e,f,g,h)
 ```
 
-`K_t` are the FIPS 180-4 round constants. With `S` given, the circuit asserts
+`K_t` are the FIPS 180-4 round constants. With `F` given, the circuit asserts
 that the state after round 63, `(a_64, a_63, a_62, a_61, e_64, e_63, e_62, e_61)`,
-equals `S`; from round 60 on, the asserted (public) words replace the computed
-ones, and Ch/Maj/Σ on public words fold away.
+equals `F`. From round 60 on, the asserted (public) words replace the computed
+ones. `Σ0`, `Σ1`, `Ch` and `Maj` on public words then cost no MULs, but their
+PUB instructions are emitted (§7.2).
 
-**Standalone compression circuit** (for testing the generator): 768 secret
-inputs (chaining value words 0–7, then block words 0–15, bit `i` of word `j` at
-input `32j + i`, big-endian words), `compress(H, W)`, and 256 outputs: bit `i` of
-output word `w` is output `32w + i`. Counts:
+**Standalone compression circuit** (for testing the generator): `P = 0`,
+`S = 768`. Secret input `32j + i` (wire `2 + 32j + i`) is bit `i` of word `j`;
+words 0–7 are the chaining value `H` and words 8–23 the block `W`. The circuit
+is `compress(H, W)`, with 256 outputs: output `32w + i` is bit `i` of output
+word `w`. A test that compares with native SHA-256 takes block word `j` as the
+big-endian word of block bytes `[4j, 4j+4)` (FIPS 180-4). Counts:
 **22,573 AND**, 111,607 XOR, 1,891 NOT. The AND count equals the Bristol Fashion
 SHA-256 count that R1 verified.
 
@@ -520,7 +593,8 @@ with `1 ≤ |K| ≤ 64`, every byte of `K` in `0x20..0x7E` (printable ASCII), `y
 **Relation.** `HMAC-SHA256(K, x ‖ suffix) = y` (RFC 2104 with a key of at most
 one block). Keys longer than 64 bytes are not supported.
 
-**Public bits** (`P = 776`), computed natively by prover and verifier:
+**Public bits** (`P = 776`), computed natively by prover and verifier (by the
+verifier only after step 6 of §11):
 
 | bits | value |
 |---|---|
@@ -537,7 +611,7 @@ inner   = [X_0..X_7, W8, const_word(0) ×6, const_word(776)]
           W8[i] = constant 0 for i < 23, constant 1 for i = 23, suffix bit (i−24) for i ≥ 24
 D       = compress(IV_in, inner)                               # inner digest, 8 SEC words
 outer   = [D_0..D_7, const_word(0x80000000), const_word(0) ×6, const_word(768)]
-compress(IV_out, outer, S = T)
+compress(IV_out, outer, F = T)
 ```
 
 The inner block is `x ‖ suffix ‖ 0x80 ‖ 0^22 ‖ be64(776)` and the outer block
@@ -566,11 +640,20 @@ values never change the instruction list (§7.2).
 ### 7.6 Canonical serialization and digest
 
 ```
-"VOLEitH-rescue circuit v0.1" ‖ 0x00 ‖ u32le(P) ‖ u32le(S) ‖ u32le(#instructions)
-  ‖ for each instruction: opcode ‖ operands, each u32le
-        (XOR = 0x01 a b; AND = 0x02 a b, including MULs; NOT = 0x03 a; ASSERT = 0x04 a b c)
-  ‖ u32le(#outputs) ‖ outputs, each u32le
+circuit = label ‖ u32le(P) ‖ u32le(S) ‖ u32le(n) ‖ instr_1 ‖ … ‖ instr_n
+          ‖ u32le(n') ‖ u32le(o_1) ‖ … ‖ u32le(o_n')
+label   = ASCII "VOLEitH-rescue circuit v0.1" ‖ 0x00        (28 bytes, no length prefix)
+instr   = 0x01 ‖ u32le(a) ‖ u32le(b)                         XOR(a,b)       9 bytes
+        | 0x02 ‖ u32le(a) ‖ u32le(b)                         AND(a,b)       9 bytes
+        | 0x03 ‖ u32le(a)                                    NOT(a)         5 bytes
+        | 0x04 ‖ u32le(a) ‖ u32le(b) ‖ u32le(c)              ASSERT(a,b,c) 13 bytes
 ```
+
+- The opcode is one byte; each operand is a wire id in `u32le`.
+- The instructions are the emitted ones, in emission order (§7.4), with
+  operands in call order (§7.2). `n` counts them, ASSERTs included.
+- A MUL is serialized as AND (`0x02`); kinds are not serialized.
+- `o_1 … o_n'` are the output wire ids. A statement circuit has `n' = 0`.
 
 SHA-256 of this byte string:
 
@@ -582,7 +665,29 @@ SHA-256 of this byte string:
 The label "circuit v0.1" is the version of the circuit layer, which v0.2 does
 not change (§16).
 
-An independent implementation that follows §7.2–§7.5 reproduces these digests.
+An independent builder written from §7.2–§7.5 reproduced both digests and
+every gate count (the clean-room verifier, §16).
+
+**Per-gadget circuits.** `vectors/gadgets-v0.2.json` lists 20 small circuits
+built from the gadgets of §7.4, so that a digest mismatch can be traced to
+one gadget. Each entry gives `P`, `S`, the construction, the gate counts,
+the serialization length and its SHA-256; entries of at most 2,048 bytes also
+give the serialization in hex. Public word `Pj` is public inputs
+`[32j, 32j+32)` and secret word `Sj` is secret inputs `[32j, 32j+32)`. The
+outputs are the returned word's 32 wires, unless the entry says otherwise.
+The circuits cover:
+
+- `add` on SEC+SEC, SEC+PUB, PUB+SEC and SEC+constant;
+- `add_multi` with SEC, PUB, zero and other constant words;
+- `xor_w` with a constant (NOTs);
+- `Ch` and `Maj` on SEC words, on mixed SEC and PUB words, and `Maj` with
+  both forms in one word;
+- `Σ0`, `Σ1`, `σ0`, `σ1` on a SEC word, and `Σ0` on a PUB word;
+- `assert_add` with SEC+SEC=PUB and SEC+PUB=PUB;
+- one full `compress` with a SEC chaining value and a PUB block.
+
+`python/tools/gen_gadget_vectors.py` writes the file. The Python and Rust
+tests rebuild every entry.
 
 ### 7.7 Encoding soundness
 
@@ -632,7 +737,7 @@ hcom     = SHAKE256[hcom](h_0 ‖ … ‖ h_{τ−1}, 32)
 chall1   = SHAKE256[ch1](μ ‖ hcom ‖ enc(c_1) ‖ … ‖ enc(c_{τ−1}) ‖ iv_pre, 32)
 h_V      = SHAKE256[hv](Ṽ_0 ‖ … ‖ Ṽ_127, 32)
 chall2   = SHAKE256[ch2](chall1 ‖ ũ ‖ h_V ‖ enc(d), 64)
-chall3   = SHAKE256[ch3](chall2 ‖ enc(ã) ‖ enc(b̃), 16)
+chall3   = SHAKE256[ch3](chall2 ‖ ã ‖ enc(b̃), 16)
 Δ        = chall3 as a field element; δ_i decoded from Δ (§5.3)
 ```
 
@@ -647,8 +752,8 @@ chall3   = SHAKE256[ch3](chall2 ‖ enc(ã) ‖ enc(b̃), 16)
 
 ## 9. Prover
 
-`prove(statement, x, m, rng)`, where `rng(n)` returns `n` bytes and is called
-exactly once with `n = 32`:
+`prove(statement, x, m, rng)`, with `statement` as in §11, where `rng(n)`
+returns `n` bytes and is called exactly once with `n = 32`:
 
 1. Reject an unknown statement id, non-canonical public inputs, `m` not bytes
    or longer than 65,535 bytes, or `|x| ≠ 32`.
@@ -701,15 +806,25 @@ encoding of the same proof.
 
 ## 11. Verifier
 
-`verify(statement, m, π) → bool`. Return false at the first failed check.
-**Steps 1–5 happen before any hashing or parsing of proof contents.**
+`verify(statement, m, π) → bool`, where:
 
-1. The statement id is a registered id (only `0x01` in v0.2); otherwise false.
-2. The public inputs parse canonically (§7.5): first byte `L ∈ [1, 64]`, total
-   length exactly `L + 34`, `K` bytes in `0x20..0x7E`.
+- `statement = (sid, pub)`: `sid` is the statement id, an integer, and `pub`
+  is the byte string of public inputs in the encoding of §7.5, as received;
+- `m` is the message and `π` the proof, both byte strings.
+
+The verifier never takes parsed public inputs such as `(K, suffix, y)`: step 2
+checks `pub`, and `μ` (§8) hashes `pub` as received. An `sid` outside
+`[0, 255]` is not registered and fails step 1, so `u8(sid)` in `μ` is always
+defined. An argument of the wrong type fails the step that checks it.
+
+Return false at the first failed check:
+
+1. `sid` is a registered id (only `0x01` in v0.2).
+2. `pub` parses canonically (§7.5): first byte `L ∈ [1, 64]`, total length
+   exactly `L + 34`, `K` bytes in `0x20..0x7E`.
 3. `m` is a byte string of length ≤ 65,535.
 4. `π` is a byte string of length exactly `|π|` for this statement id (130,218).
-5. `π[0] = 0x02` and `π[1] =` the statement id.
+5. `π[0] = 0x02` and `π[1] = sid`.
 6. Split `π` at the fixed offsets of §10. Decode each `enc(c_i)` and `enc(d)`;
    reject if any padding bit is non-zero. Steps 8–9 hash these bytes as
    received.
@@ -718,22 +833,29 @@ encoding of the same proof.
    seeds `sd_{i,j}`, `j ≠ j*`; expand them (§5.1); compute `q_{i,b}` (§5.2); form
    `Q` with the corrections (§5.3). Compute `hcom` and `chall1`.
 9. `h_V` from `VH(Q_j) ⊕ Δ_j·ũ` (§5.4); `chall2`.
-10. Correct `Q` with `d` (§6.1); compute rows `q[r]` for `r < ℓ + 128`; evaluate
-    the circuit's keys (§7.3) to get `B_t`; `q*`; `q̃ = ZKH(B; q*)`;
-    `b̃ = q̃ ⊕ ã·Δ`.
+10. Correct `Q` with `d` (§6.1); compute rows `q[r]` for `r < ℓ + 128`; compute
+    the public bits (§7.5); evaluate the circuit's keys (§7.3) to get `B_t`;
+    `q*`; `q̃ = ZKH(B; q*)`; `b̃ = q̃ ⊕ ã·Δ`.
 11. Recompute `chall3' = SHAKE256[ch3](chall2 ‖ ã ‖ enc(b̃), 16)` and return
     `chall3' == chall3`.
 
-`vectors/statement1-v0.2.json` holds 4 valid vectors and 52 negative vectors
-(edits of a valid proof, statement or message: every header byte, every padding
-bit, each proof section, length ±1, wrong `m`, `y`, `K`, `suffix` and statement
-id) that every conforming verifier must reject.
+**Steps 1–6 depend only on `sid`, `pub`, the length of `m`, the length of
+`π`, `π[0..2)` and the padding bits of each `enc(c_i)` and `enc(d)`.** No hash,
+PRG, field or circuit work happens before all of steps 1–6 have passed. That
+includes the native SHA-256 compressions of `K` and the subtraction that form
+the public bits (§7.5). Step 10 lists them; an implementation may compute them
+at any point after step 6.
+Steps 1–5 may run in any order without changing the verdict; step 6 needs
+the length that step 4 checked.
+
+Every conforming verifier gives the expected verdict on every case of the two
+proof vector files (Appendix A).
 
 Properties:
 
-- Steps 1–6 need only the fixed sizes of the statement id, not its circuit.
-  An implementation that builds a statement's circuit lazily must do so after
-  step 6, or the first malformed input in a process pays for the build.
+- Steps 1–6 need only the fixed sizes of the statement id (§10), not its
+  circuit. So a circuit that is built lazily is built after step 6, and a
+  malformed input never pays for the build.
 - The work after step 6 is bounded but not constant. Fixed work dominates it
   (about 5.3 MB of SHAKE256 output and the circuit's keys), and it varies
   with the bits of `Δ = chall3`: each set bit `Δ_j` adds a conditional XOR of
@@ -781,7 +903,9 @@ A valid proof shows only that its maker knew some `x` with
 is a property of the proof system; if the rescue-lane rules miss one, coins
 can be stolen however sound the proof is. They are hard requirements on the
 M4-R design (from the 2026-10-14 internal reviews; not yet checked against
-that design):
+that design). The node or the rescue adapter performs these checks, never
+`verify`: `verify` performs exactly the checks of §11, so it accepts any
+32-byte `y` and any `m` of up to 65,535 bytes.
 
 1. **`y` is fixed by the spent output.** The node takes `y` from the rescue
    token and checks natively that `0 < y < n` (the secp256k1 group order) and
@@ -880,7 +1004,7 @@ outputs have at least 256 bits.
   at most `Q_H^2/2` pairs of outputs, each colliding with probability
   `2^−256`, with a factor 2 to spare for a query that hits a value fixed
   earlier in the transcript. The `chall3` term is new: the verifier compares
-  `SHAKE256[ch3](chall2 ‖ ã ‖ b̃')` with the `chall3` in the proof, not `b̃'`
+  `SHAKE256[ch3](chall2 ‖ ã ‖ enc(b̃'))` with the `chall3` in the proof, not `b̃'`
   with `b̃`, so a `ch3` query can also succeed when `b̃' ≠ b̃` and the 128-bit
   outputs coincide. That is a fixed-point event, `2^−128` per query, not a
   birthday bound, because `Δ`, and with it `b̃'`, is that same query's output.
@@ -1135,6 +1259,23 @@ either change would need a new version:
   (consensus preconditions), §13 (assumptions, missing terms, lemma
   sketches, the quantum risk decision), §14 and §15. The version byte, the
   tags, the parameters, the proof format and the vectors are unchanged.
+- Revision 2 of v0.2 (2026-10-15) changes wording only, after a clean-room
+  implementation. A Go verifier written from revision 1 and the vectors
+  alone agrees with every vector and reproduces both circuit digests. Its
+  author listed 18 issues in the text (`go/SPEC-ISSUES.md`, branch
+  `cleanroom/go-verifier`); the vectors contradicted none of them. Revision 2
+  states what the vectors and the reference already fixed: §1 (normative
+  sources, symbol table), §1.2 (the first `n` bits of a hash output are
+  masked, not checked), §3.2–§3.3 and §8 (one notation for hash inputs),
+  §5.3 (bit order of `Δ` and `δ_i`), §6.3 (the two Horner forms), §7.2 (only
+  ids 0 and 1 fold; NOT is emitted), §7.4 (one emission-order rule,
+  `add_multi`'s fold, PUB instructions emitted, the standalone circuit's
+  inputs), §7.6 (byte grammar, per-gadget circuits), §11 (the interface,
+  what steps 1–6 read), §12.1 (consensus checks are not in `verify`) and
+  Appendix A (vector files). Two symbols were renamed: the hash tag (§3.1)
+  and `compress`'s asserted state `F` (§7.4). The version byte, the tags,
+  the parameters, the proof format and both vector files of revision 1 are
+  unchanged; `vectors/gadgets-v0.2.json` is new.
 - v0.2 is a review draft. After review, a frozen version is published with new
   vectors.
 
@@ -1163,3 +1304,52 @@ either change would need a new version:
 - [FIPS 180-4] SHA-256. [FIPS 202] SHAKE256. [RFC 2104] HMAC.
 - Internal: `R1-voleith-plan.md`, `R-rescue-proof-system.md`,
   `m4-design-2026-10-14.md` §11, `m4-plan-2026-10-14.md` §9.
+
+## Appendix A. Vector files
+
+Three files in `vectors/` pin the behaviour. Byte strings are hex unless
+noted. The `spec` field names the version; a revision that changes wording
+only keeps a file unchanged (§16).
+
+**`statement1-v0.2.json`: known answers.**
+
+- The header gives the parameters, `proof_len` and the statement 0x01
+  circuit: its digest (§7.6) and gate counts (§7.5).
+- `vectors`: 4 valid proofs. Each gives the statement (`statement_id`,
+  `public_inputs`, and `K_ascii`, `suffix`, `y` for reading), `witness_x`,
+  `message`, `rho` (the one `rng(32)` output, §9), `proof` and
+  `intermediates` (`mu` … `chall3`, for localising a mismatch).
+- `negative_vectors`: 52 cases. Each applies one edit, `proof_edit`, to the
+  proof of `vectors[base_vector]`, and verifies the result against its own
+  `statement_id`, `public_inputs` and `message`. The expected verdict is
+  false. The cases cover every header byte, every padding bit, each proof
+  section, length ±1, the empty proof, malformed public inputs, and a wrong
+  `m`, `y`, `K`, `suffix` or statement id.
+
+**`statement1-v0.2-differential.json`: verdicts.** `format` is
+`voleith-differential-1`.
+
+- `valid`: 100 proofs with `expected` true. They have the fields of a known
+  answer except `proof_len` and `intermediates`, and carry the proof as base64 in
+  `proof_b64`.
+- `mutated`: 440 cases with `expected` false. Each applies the list
+  `proof_edits`, in order, to the decoded proof of `valid[base]`, and
+  verifies the result against its own `statement_id` (0, 1, 2 or 255),
+  `public_inputs` and `message`. A `message` of null means `message_zeros`
+  zero bytes. `kind` groups the cases; `counts` gives the number per kind.
+- `master_seed` and `stream_note` say how the generator derived each case;
+  a verifier does not need them.
+
+**Edit language.** An edit is a JSON object; offsets and lengths count bytes
+of the proof:
+
+| `op` | fields | effect |
+|---|---|---|
+| `none` | | no change; the case changes the statement or the message (known-answer file only) |
+| `xor` | `offset`, `mask` | XOR the byte at `offset` with the one-byte `mask` |
+| `set` | `offset`, `data` | overwrite `\|data\|` bytes from `offset`, inside the proof |
+| `truncate` | `length` | keep the first `length` bytes |
+| `append` | `data` | append `data` |
+| `prepend` | `data` | insert `data` before byte 0 |
+
+**`gadgets-v0.2.json`: per-gadget circuits.** §7.6 describes it.
