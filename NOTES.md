@@ -731,6 +731,60 @@ Results:
 The `crosscheck` branch ran the same harness for 60 minutes against the
 constant-time verifier, with the same result.
 
+## Integration (2026-10-15)
+
+Branch `cloud/t7-integrate`, from `main` at `a405ac5`.
+
+- **How the inputs went in.**
+  - `ct-prover`, `spec-rev2`, `fuzz` and `crosscheck` are merged in that
+    order (`--no-ff`). There was no conflict, NOTES.md included: every edit
+    of both sides merged cleanly. `crosscheck` carries an earlier state of
+    `ct-prover`, so `rust/src`, `Cargo.toml`, `Cargo.lock`, `CT-AUDIT.md`
+    and `benches/` end up equal to `ct-prover`'s.
+  - `cleanroom/go-verifier`: `go/` copied with
+    `git archive origin/cleanroom/go-verifier go | tar -x` in one commit;
+    its history is not merged and its files are unchanged.
+- **Fixes, each its own commit.**
+  - `rust/tests/gadget_vectors.rs` did not compile (`crate::clmul` missing
+    from `gf128.rs`). The test now also includes `src/clmul.rs`, under the
+    same cfg as lib.rs. Nothing under `rust/src` changed.
+  - `crosscheck/fuzz/` removed: its targets, library and scripts were
+    identical to `rust/fuzz/`; only the `voleith` path and the zeroize lock
+    entries differed. `crosscheck/REPORT.md` now points at `rust/fuzz/`.
+  - `crosscheck/run.sh` copies the tree's `go/` into
+    `crosscheck/work/go-src/` (ignored) instead of exporting the branch to
+    `/tmp/xc-go`; the driver comment in `crosscheck/go/main.go` says so.
+  - `rust/fuzz/Cargo.lock` gains `zeroize 1.8.2`, which `cargo fuzz build`
+    adds for the merged crate (the same lock as the removed copy).
+- **New check.** `go/voleith/gadget_vectors_test.go` rebuilds all 20
+  circuits of `vectors/gadgets-v0.2.json` with the clean-room builder
+  (`circuit.go`, written from SPEC revision 1). All 20 match: digest,
+  serialization length, the hex of the 18 entries that give it,
+  instruction and output counts, and every gate count.
+
+Checks (4 vCPUs, rustc 1.97.0, nightly 1.101.0, cargo-fuzz 0.13.2,
+Go 1.24.7, Python 3.13.16):
+
+| Check | Result |
+|---|---|
+| `python -I -m unittest discover -s python/tests -t python` | 81 tests OK (62 s) |
+| `cargo test --release` | 40 passed, 2 ignored, 0 failed (lib 24 + 2 ignored, cold_reject 1, differential 2, gadget_vectors 6, vectors 7) |
+| `cargo test` | the same 40 passed, 2 ignored |
+| `cargo clippy --all-targets --all-features -- -D warnings` | clean |
+| `cargo fmt --check` | clean |
+| `go vet ./...` | clean |
+| `go test ./...` | 17 tests pass (24 subtests, 20 of them gadget vectors), 1 skipped (`TestMedianVerifyTime`, benchmark only) |
+| fuzz build (`verify_raw`, `verify_mutate` without sanitizer, `ffi` with AddressSanitizer) | all three build against the merged crate |
+| fuzz run, `run_campaign.sh 120` (all three targets in parallel, 2 min each) | `verify_mutate` 6,680 + 6,669, `verify_raw` 41,580, `ffi` 17,752 executions; no crash, artifact or slow input |
+| `bash crosscheck/run.sh` (takes a seed, not a case count: default 100 cases) | 800 tests, 0 mismatches between Rust, Python and Go (2 min 39 s) |
+| SHA-256 of `vectors/statement1-v0.2.json` | `e4ae3f6d…8097d3`, as on `main` |
+| SHA-256 of `vectors/statement1-v0.2-differential.json` | `9ec6ff5f…0a3535`, as on `main` |
+
+No test failed. SPEC.md, `python/`, `vectors/` and `rust/src` are those of
+the reviewed branches, and every proof is unchanged (the Rust vector and
+differential tests reproduce the 4 vector and 100 differential proofs byte
+for byte).
+
 ## Open questions for reviewers
 
 1. **The security argument.** Does FAEST v1.1 Theorems 1–2 (with BBD+23
