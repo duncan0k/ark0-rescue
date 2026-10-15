@@ -545,6 +545,98 @@ none overlapped minutes x4 or x5 or another workload's six-hourly job
 - **Performance.** Nothing is optimised beyond what the Python tests need. The
   Rust verifier is too slow for the validation weight; see "Rust verifier".
 
+## 2026-10-15 work branches
+
+Three tasks ran in cloud sessions on 2026-10-15, each on its own branch.
+Nothing from them is in `main` yet.
+
+| Branch | What | State |
+|---|---|---|
+| `cleanroom/go-verifier` | An independent verifier in Go, written from SPEC.md and the vectors only. Its base, `cleanroom/base`, holds nothing else. | done |
+| `ct-prover` | Finding F7: constant-time GF(2^128) arithmetic in the Rust prover, zeroization and a dudect-style timing test (`rust/CT-AUDIT.md`). | done, not yet reviewed |
+| (fuzzing) | cargo-fuzz targets for `verify`, for structured mutations of the valid proofs and for the C ABI. | running |
+
+### Clean-room Go verifier
+
+- **Results.** Go 1.24, standard library only (`crypto/sha3`).
+  - It verifies the 4 KATs with every intermediate equal, rejects all 52
+    negatives and gives the expected verdict on all 540 differential cases.
+  - It reproduces both circuit digests of §7.6 and every gate count.
+  - An instrumented test shows that every rejection at steps 1–6 happens
+    before any hash call.
+  - Single-thread median verify time is about 27 ms on a 2.1 GHz Xeon.
+    Valid proofs, `chall3 = ff…ff` and a 65,535-byte message are within
+    0.25 ms of each other.
+- **Spec issues.** `go/SPEC-ISSUES.md` lists 18 places where SPEC.md is
+  ambiguous, underspecified or inconsistent. None disagrees with the vectors.
+  For each one, the session implemented the other reading and ran it against
+  the vectors and the digests. All 18 are wording or completeness issues, for
+  a wording-only revision 2 (no protocol change, vectors unchanged).
+
+| # | Severity | Section | Issue |
+|---|---|---|---|
+| 1 | High | §1.2, §5.1 | "The first ℓ̂ bits" of an `exp` output is defined through the padding rule, which rejects. Read literally, every valid proof fails: about half of the 1,000 expansions per proof have the padding bit set. |
+| 2 | High | §7.4, §7.6 | The circuit is pinned by its digest only. Items 4–8 and 10 are guesses that only the digest confirms, and a mismatch cannot be localised. Needs a byte grammar, one emission-order rule and per-gadget test digests. |
+| 3 | Medium | §11 | "Steps 1–5 before any hashing or parsing of proof contents" conflicts with step 5, which reads `π[0..2)`. It is not said when the SHA-256 work on `K` happens. Should read: steps 1–6 touch only lengths, the public-input encoding, `π[0..2)` and the padded bytes; no hash, PRG or circuit work before step 7. |
+| 4 | Medium | §7.6 | Opcode width: one byte, then `u32le` operands. |
+| 5 | Medium | §7.4 | `add_multi`: the accumulator is the first argument, `acc = add(acc, next)`. |
+| 6 | Medium | §7.4 | Nested gadgets: arguments complete first; per-bit gadgets emit all of bit `i` before bit `i+1`; σ1 before σ0; the whole schedule before round 0. |
+| 7 | Medium | §7.4, §7.2 | "Ch/Maj/Σ on public words fold away" contradicts "only constants fold". The PUB instructions are emitted; they only cost no MULs. |
+| 8 | Medium | §7.4 | Standalone compression circuit: `P = 0` is not stated, and "big-endian words" has no meaning for a wire layout. |
+| 9 | Medium | §11, §7.5 | The `verify` interface is not defined: statement id width, and the encoded public inputs as the input. |
+| 10 | Low | §7.2 | "Return `NOT(w)`" means the builder's NOT instruction, not `XOR(w, 1)`. |
+| 11 | Low | §3.2, §8, §11 | Three notations for the `ch3` input. |
+| 12 | Low | §5.4, §6.3 | VH and ZKH use opposite Horner conventions; ZKH's `t` sum is only implied. |
+| 13 | Low | §5.3 | The bit order of `Δ` and `δ_i` must be assembled from three sections. |
+| 14 | Low | throughout | Symbols reused with other meanings (`s`, `t`, `T`, `S`, `w`, `c`, `C`, `r`, `Q`, `d`). |
+| 15 | Low | §3.3 | "A `leaf` and an `exp` call differ only by tag" holds for the non-secret prefixes only. |
+| 16 | Low | §11, §12.1 | The rescue-lane checks (`y` range, 96-byte `m`) could be put into `verify` by mistake. |
+| 17 | Low | §11 | SPEC does not describe the differential file or its edit language. |
+| 18 | Low | §1, §11, §14 | SPEC defers to code and to NOTES.md, which an independent implementer may not have. |
+
+### Constant-time prover
+
+What the branch changes (9 commits on `580fabe`):
+
+- **Multiplication.** GF(2^128) products use PCLMULQDQ, detected at run
+  time, and otherwise a bit-serial masked multiply.
+- **Hashes.** The prover's universal hashes take a constant-time key
+  multiplier, and the type system keeps the 64 KiB tables out of the
+  prover.
+- **Branches.** Two branches on secret data are gone: the ASSERT check in
+  circuit evaluation and the early-exit HMAC comparison.
+- **Zeroization.** `zeroize =1.8.2` plus sha3's `zeroize` feature, and a
+  64 KiB stack scrub after `prove`.
+
+Results and status:
+
+- **Tests (as reported by the session, not yet rerun here).** Every proof
+  is byte-identical. 31 tests pass in release and dev, and clippy and fmt
+  are clean. `python/`, `vectors/` and SPEC.md are untouched (checked here
+  by diff).
+- **Speed.** On PCLMULQDQ hardware the verifier uses the same constant-time
+  multiply. Verify went from 27.3 to 24.1 ms (−11.7%) and prove from 29.9 to
+  28.0 ms (−6.4%): medians of 3 × 31 alternating runs on a 2.8 GHz Xeon VM.
+  Without PCLMULQDQ the prover takes about 125 ms, and the verifier keeps its
+  tables.
+- **Timing tests.** The leaky control and the old tables show |t| > 1,200,
+  while both constant-time multiplies stay below 2.4 at n = 200,000. The
+  prove()-level test cannot tell the old prover from the new one, so it is a
+  smoke test only. False alarms from an earlier harness version are recorded
+  in `rust/CT-AUDIT.md`.
+- **Known gaps.**
+  - The `digest 0.10` block buffer and the XOF output buffer cannot be
+    zeroized; only the stack scrub covers them.
+  - Registers.
+  - The caller's `witness` and `rho`.
+  - No aarch64 PMULL path: the portable path is used there.
+- **Before merging.** Rerun the tests and vectors outside the session that
+  wrote the code, and review the diff.
+
+### Fuzzing
+
+Running since 07:16 UTC: 3 h 10 min on 4 cores. The results will go here.
+
 ## Open questions for reviewers
 
 1. **The security argument.** Does FAEST v1.1 Theorems 1–2 (with BBD+23
