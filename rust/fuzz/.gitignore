@@ -5,3 +5,4 @@ coverage/
 logs/
 slow/
 target-asan/
+logs-phase1/
