@@ -14,9 +14,10 @@ use crate::gf128::{self, FixedMul};
 use crate::params::{LAMBDA, LAMBDA_BYTES, MAX_LEAVES, MAX_MESSAGE_LEN, RHO_BYTES, VERSION};
 use crate::statements::{self, Layout, STATEMENT1_ID};
 use crate::sym::{Tag, Xof};
-use crate::unihash::{VoleHash, ZkAcc, ZkHash};
+use crate::unihash::{CtMul, VoleHash, ZkAcc, ZkHash};
 use crate::vc;
 use crate::vole::{self, ConvertScratch};
+use zeroize::{Zeroize, Zeroizing};
 
 /// Proof length in bytes for a registered statement id.
 pub fn proof_length(statement_id: u8) -> Option<usize> {
@@ -42,6 +43,17 @@ fn mask_element(rows: &[u128]) -> u128 {
         z = gf128::mul_x(z) ^ r;
     }
     z
+}
+
+/// Equality of two byte strings of the same length without an early exit:
+/// the time does not depend on where they differ.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    debug_assert_eq!(a.len(), b.len());
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    core::hint::black_box(diff) == 0
 }
 
 fn arr16(b: &[u8]) -> [u8; 16] {
@@ -233,7 +245,7 @@ fn verify_core(
         .finalize();
 
     // 9. VOLE consistency: h_V from VH(Q_j) + Delta_j * u_tilde, then chall2.
-    let vh = VoleHash::new(&chall1, ell);
+    let vh = VoleHash::<FixedMul>::new(&chall1, ell);
     let mut hv = Xof::new(Tag::Hv);
     for (j, col) in cols.chunks_exact(cb).enumerate() {
         let mut h = vh.hash(col);
@@ -262,14 +274,14 @@ fn verify_core(
         }
     }
     let rows = vole::columns_to_rows(&cols, cb, ell + LAMBDA);
-    let zk = ZkHash::new(&chall2);
+    let zk = ZkHash::<FixedMul>::new(&chall2);
     let mul_delta = FixedMul::new(delta);
     let mut acc = ZkAcc::default();
     circuit.verifier_terms(public_bits, &rows[..ell], delta, &mul_delta, |b| {
         zk.absorb(&mut acc, b)
     });
     let q_tilde = zk.finish(&acc, mask_element(&rows[ell..]));
-    let b_tilde = gf128::to_bytes(q_tilde ^ gf128::mul(gf128::from_bytes(&a_tilde), delta));
+    let b_tilde = gf128::to_bytes(q_tilde ^ gf128::mul_public(gf128::from_bytes(&a_tilde), delta));
 
     // 11. chall3' and the comparison.
     let check: [u8; 16] = Xof::new(Tag::Ch3)
@@ -291,11 +303,7 @@ fn verify_core(
             chall3: check,
         };
     }
-    let mut diff = 0u8;
-    for (a, b) in check.iter().zip(chall3.iter()) {
-        diff |= a ^ b;
-    }
-    diff == 0
+    ct_eq(&check, &chall3)
 }
 
 // ------------------------------------------------------------------ prover
@@ -313,7 +321,8 @@ pub enum ProveError {
 /// The prover's intermediate values, for comparison with the vectors'
 /// intermediates; only `prove_traced` (cargo feature `test-trace`) fills it.
 /// It holds the root seed `r` and the tree roots, from which the witness can
-/// be recovered, so it has no `Debug` and `prove` never produces it.
+/// be recovered, so it has no `Debug`, `prove` never produces it, and it is
+/// zeroized when dropped.
 #[doc(hidden)]
 #[derive(Default)]
 pub struct ProverTrace {
@@ -333,13 +342,23 @@ pub struct ProverTrace {
     pub chall3: [u8; 16],
 }
 
+impl Drop for ProverTrace {
+    fn drop(&mut self) {
+        self.r.zeroize();
+        self.roots.zeroize();
+    }
+}
+
 /// Proof of knowledge of `witness` for the statement, bound to `message`
 /// (SPEC.md §9). `rho` is the 32 bytes of hedging randomness (the output of
 /// the single rng(32) call of the reference); it must be fresh and secret for
 /// real use.
 ///
-/// This prover is for tests and tools: it is not constant time and does not
-/// zeroize its secrets.
+/// The field arithmetic and the control flow on secret data are constant
+/// time, and every secret buffer the prover allocates is zeroized before it
+/// is freed; the stack the prover used is overwritten before returning (best
+/// effort). The caller owns `witness` and `rho` and must clear them itself.
+/// See rust/CT-AUDIT.md for what was checked and what remains.
 pub fn prove(
     statement_id: u8,
     public_inputs: &[u8],
@@ -348,7 +367,7 @@ pub fn prove(
     rho: &[u8; RHO_BYTES],
 ) -> Result<Vec<u8>, ProveError> {
     let lay = statements::layout(statement_id).ok_or(ProveError::UnknownStatement)?;
-    prove_impl(
+    prove_scrubbed(
         &lay,
         statement_id,
         public_inputs,
@@ -357,6 +376,52 @@ pub fn prove(
         rho,
         None,
     )
+}
+
+/// The one way into `prove_impl`: every prover entry point (`prove`,
+/// `prove_traced`, `bench::prove`) goes through here, so the stack is
+/// scrubbed after every return of `prove_impl`, `Ok` and `Err` alike.
+///
+/// `prove_impl` is `#[inline(never)]`: if it were inlined here, its secrets
+/// would sit in this function's own frame, which `scrub_stack` (a callee,
+/// whose frame lies below this one) cannot reach.
+///
+/// A panic inside `prove_impl` unwinds past `scrub_stack`: heap secrets are
+/// still cleared by their destructors during unwinding, but the stack is not
+/// scrubbed on that path.
+fn prove_scrubbed(
+    lay: &Layout,
+    statement_id: u8,
+    public_inputs: &[u8],
+    witness: &[u8],
+    message: &[u8],
+    rho: &[u8; RHO_BYTES],
+    trace: Option<&mut ProverTrace>,
+) -> Result<Vec<u8>, ProveError> {
+    let res = prove_impl(
+        lay,
+        statement_id,
+        public_inputs,
+        witness,
+        message,
+        rho,
+        trace,
+    );
+    scrub_stack();
+    res
+}
+
+/// Overwrite with zeros the stack below the caller's (`prove_scrubbed`'s)
+/// frame, where the frames of `prove_impl` and its callees held copies of
+/// secrets (seeds, hash
+/// states, field elements). Best effort: the compiler decides frame layout,
+/// so this covers `SCRUB_BYTES` below this frame and nothing else.
+#[inline(never)]
+fn scrub_stack() {
+    const SCRUB_BYTES: usize = 64 * 1024;
+    let mut buf = [0u8; SCRUB_BYTES];
+    buf.zeroize();
+    core::hint::black_box(&buf);
 }
 
 /// `prove`, also returning the prover's intermediate values, secrets
@@ -372,7 +437,7 @@ pub fn prove_traced(
 ) -> Result<(Vec<u8>, ProverTrace), ProveError> {
     let lay = statements::layout(statement_id).ok_or(ProveError::UnknownStatement)?;
     let mut trace = ProverTrace::default();
-    let proof = prove_impl(
+    let proof = prove_scrubbed(
         &lay,
         statement_id,
         public_inputs,
@@ -380,10 +445,13 @@ pub fn prove_traced(
         message,
         rho,
         Some(&mut trace),
-    )?;
-    Ok((proof, trace))
+    );
+    Ok((proof?, trace))
 }
 
+/// The prover itself. Call it only through `prove_scrubbed`; never inline it
+/// (see there).
+#[inline(never)]
 fn prove_impl(
     lay: &Layout,
     statement_id: u8,
@@ -404,7 +472,10 @@ fn prove_impl(
     if witness.len() != statements::S1_WITNESS_LEN {
         return Err(ProveError::BadWitnessLength);
     }
-    if &statements::s1_hmac(parsed.key, parsed.suffix, witness) != parsed.y {
+    if !ct_eq(
+        &statements::s1_hmac(parsed.key, parsed.suffix, witness),
+        parsed.y,
+    ) {
         return Err(ProveError::RelationFails);
     }
     let circ = statements::circuit(statement_id).ok_or(ProveError::UnknownStatement)?;
@@ -412,35 +483,43 @@ fn prove_impl(
     let tau = split.tau();
     let (ell, lhat, cb) = (lay.ell, lay.lhat, lay.c_bytes);
     let public_bits = statements::s1_public_bits(&parsed);
-    let (_, w_bits, ok) = circ.evaluate(&public_bits, &statements::s1_secret_bits(witness));
+    // Every secret buffer below is Zeroizing (or zeroizes itself on drop:
+    // vc::Tree, ConvertScratch, ZkAcc) and is allocated at its final size,
+    // so no reallocation leaves a copy behind.
+    let secret_bits = Zeroizing::new(statements::s1_secret_bits(witness));
+    let (wires, w_bits, ok) = circ.evaluate(&public_bits, &secret_bits);
+    let (_wires, w_bits) = (Zeroizing::new(wires), Zeroizing::new(w_bits));
     if !ok {
         return Err(ProveError::RelationFails);
     }
 
     // Phase 1: randomness, IV, VOLE commitment, chall1.
     let mu = compute_mu(statement_id, public_inputs, message);
-    let rnd: [u8; 32] = Xof::new(Tag::Rnd)
-        .update(&(witness.len() as u16).to_le_bytes())
-        .update(witness)
-        .update(&mu)
-        .update(rho)
-        .finalize();
-    let r = arr16(&rnd[..16]);
+    let rnd: Zeroizing<[u8; 32]> = Zeroizing::new(
+        Xof::new(Tag::Rnd)
+            .update(&(witness.len() as u16).to_le_bytes())
+            .update(witness)
+            .update(&mu)
+            .update(rho)
+            .finalize(),
+    );
+    let r: &[u8] = &rnd[..16];
     let iv_pre = arr16(&rnd[16..]);
     let iv: [u8; 16] = Xof::new(Tag::Iv).update(&iv_pre).update(&mu).finalize();
-    let mut roots = vec![0u8; tau * LAMBDA_BYTES];
+    let mut roots = Zeroizing::new(vec![0u8; tau * LAMBDA_BYTES]);
     Xof::new(Tag::Root)
         .update(&iv)
-        .update(&r)
+        .update(r)
         .finalize_into(&mut roots);
 
     let mut trees = Vec::with_capacity(tau);
-    let mut v_cols = vec![0u8; LAMBDA * cb];
-    let mut us = vec![vec![0u8; cb]; tau];
+    let mut v_cols = Zeroizing::new(vec![0u8; LAMBDA * cb]);
+    let mut us = Zeroizing::new(vec![vec![0u8; cb]; tau]);
     let mut scratch = ConvertScratch::new(cb);
     for (i, u_i) in us.iter_mut().enumerate() {
         let depth = split.depth(i);
-        let tree = vc::commit(&arr16(&roots[16 * i..16 * i + 16]), &iv, i as u8, depth);
+        let root: &[u8; 16] = roots[16 * i..16 * i + 16].try_into().expect("16 bytes");
+        let tree = vc::commit(root, &iv, i as u8, depth);
         let first = split.offset(i);
         let tree_cols = &mut v_cols[first * cb..(first + depth) * cb];
         let mut col_refs: Vec<&mut [u8]> = tree_cols.chunks_exact_mut(cb).collect();
@@ -454,7 +533,7 @@ fn prove_impl(
         );
         trees.push(tree);
     }
-    let u = us[0].clone();
+    let u = Zeroizing::new(us[0].clone());
     let mut c_all = Vec::with_capacity((tau - 1) * cb);
     for u_i in &us[1..] {
         c_all.extend(u.iter().zip(u_i.iter()).map(|(a, b)| a ^ b));
@@ -472,7 +551,7 @@ fn prove_impl(
         .finalize();
 
     // Phase 2: VOLE consistency hash and witness commitment, chall2.
-    let vh = VoleHash::new(&chall1, ell);
+    let vh = VoleHash::<CtMul>::new(&chall1, ell);
     let u_tilde = vh.hash(&u);
     let mut hv = Xof::new(Tag::Hv);
     for col in v_cols.chunks_exact(cb) {
@@ -498,18 +577,18 @@ fn prove_impl(
         .finalize();
 
     // Phase 3: QuickSilver, chall3.
-    let rows = vole::columns_to_rows(&v_cols, cb, ell + LAMBDA);
-    let zk = ZkHash::new(&chall2);
+    let rows = Zeroizing::new(vole::columns_to_rows(&v_cols, cb, ell + LAMBDA));
+    let zk = ZkHash::<CtMul>::new(&chall2);
     let mut acc0 = ZkAcc::default();
     let mut acc1 = ZkAcc::default();
     circ.prover_terms(&public_bits, &w_bits, &rows[..ell], |a0, a1| {
         zk.absorb(&mut acc0, a0);
         zk.absorb(&mut acc1, a1);
     });
-    let u_star = bits::load_bits(&u, ell, LAMBDA);
-    let v_star = mask_element(&rows[ell..]);
-    let a_tilde = gf128::to_bytes(zk.finish(&acc1, u_star));
-    let b_tilde = gf128::to_bytes(zk.finish(&acc0, v_star));
+    let u_star = Zeroizing::new(bits::load_bits(&u, ell, LAMBDA));
+    let v_star = Zeroizing::new(mask_element(&rows[ell..]));
+    let a_tilde = gf128::to_bytes(zk.finish(&acc1, *u_star));
+    let b_tilde = gf128::to_bytes(zk.finish(&acc0, *v_star));
     let chall3: [u8; 16] = Xof::new(Tag::Ch3)
         .update(&chall2)
         .update(&a_tilde)
@@ -534,10 +613,10 @@ fn prove_impl(
     if let Some(slot) = trace {
         *slot = ProverTrace {
             mu,
-            r,
+            r: arr16(r),
             iv_pre,
             iv,
-            roots,
+            roots: roots.to_vec(),
             tree_hashes: trees.iter().map(|t| t.hash).collect(),
             hcom,
             chall1,
@@ -557,7 +636,7 @@ fn prove_impl(
 /// split other than `params::SPLIT`.
 #[cfg(feature = "bench-splits")]
 pub mod bench {
-    use super::{prove_impl, verify_impl, ProveError};
+    use super::{prove_scrubbed, verify_impl, ProveError};
     use crate::params::{TreeSplit, RHO_BYTES};
     use crate::statements;
 
@@ -580,7 +659,7 @@ pub mod bench {
         }
     }
 
-    /// `prove` under `split`.
+    /// `prove` under `split`, with the same stack scrub as `prove`.
     pub fn prove(
         split: TreeSplit,
         statement_id: u8,
@@ -591,7 +670,7 @@ pub mod bench {
     ) -> Result<Vec<u8>, ProveError> {
         let lay =
             statements::layout_for(statement_id, split).ok_or(ProveError::UnknownStatement)?;
-        prove_impl(
+        prove_scrubbed(
             &lay,
             statement_id,
             public_inputs,

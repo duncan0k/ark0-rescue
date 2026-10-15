@@ -11,6 +11,7 @@
 
 use crate::gf128::{self, FixedMul};
 use crate::sha256;
+use zeroize::Zeroizing;
 
 pub const CONST: u8 = 0;
 pub const PUB: u8 = 1;
@@ -254,7 +255,8 @@ impl Circuit {
     }
 
     /// Evaluate in the clear. Returns every wire value, the witness bits and
-    /// whether every ASSERT holds.
+    /// whether every ASSERT holds. The work and the memory accesses depend
+    /// only on the instruction list, never on the wire values.
     pub fn evaluate(&self, public_bits: &[u8], secret_bits: &[u8]) -> (Vec<u8>, Vec<u8>, bool) {
         assert_eq!(public_bits.len(), self.n_public, "public input length");
         assert_eq!(secret_bits.len(), self.n_secret, "secret input length");
@@ -264,7 +266,8 @@ impl Circuit {
         vals.extend_from_slice(secret_bits);
         let mut witness: Vec<u8> = Vec::with_capacity(self.n_witness);
         witness.extend_from_slice(secret_bits);
-        let mut ok = true;
+        // OR of (a & b) ^ c over every ASSERT: no branch on wire values.
+        let mut bad = 0u8;
         for ins in &self.instrs {
             match *ins {
                 Instr::Xor(a, b) => {
@@ -285,13 +288,11 @@ impl Circuit {
                     vals.push(v);
                 }
                 Instr::Assert(a, b, c) => {
-                    if vals[a as usize] & vals[b as usize] != vals[c as usize] {
-                        ok = false;
-                    }
+                    bad |= (vals[a as usize] & vals[b as usize]) ^ vals[c as usize];
                 }
             }
         }
-        (vals, witness, ok)
+        (vals, witness, bad == 0)
     }
 
     /// Prover terms (SPEC.md §6.2) for every constraint in order:
@@ -307,8 +308,10 @@ impl Circuit {
         assert_eq!(public_bits.len(), self.n_public, "public input length");
         assert_eq!(witness_bits.len(), self.n_witness, "witness length");
         assert!(tags.len() >= self.n_witness, "tag length");
-        let mut bits: Vec<u8> = Vec::with_capacity(self.n_wires);
-        let mut macs: Vec<u128> = Vec::with_capacity(self.n_wires);
+        // Wire values and MACs are secret: zeroized on return, and allocated
+        // at their final size so that no reallocation leaves a copy.
+        let mut bits = Zeroizing::new(Vec::<u8>::with_capacity(self.n_wires));
+        let mut macs = Zeroizing::new(Vec::<u128>::with_capacity(self.n_wires));
         bits.extend_from_slice(&[0, 1]);
         bits.extend_from_slice(public_bits);
         bits.extend_from_slice(&witness_bits[..self.n_secret]);
@@ -383,14 +386,14 @@ impl Circuit {
                 Op::Mul(a, b) => {
                     let kz = keys[wi];
                     wi += 1;
-                    sink(gf128::mul(vals[a as usize], vals[b as usize]) ^ mul_delta.mul(kz));
+                    sink(gf128::mul_public(vals[a as usize], vals[b as usize]) ^ mul_delta.mul(kz));
                     kz
                 }
                 Op::Assert(a, b, c, m) => {
                     let ka = key_of(vals[a as usize], m & 1 != 0);
                     let kb = key_of(vals[b as usize], m & 2 != 0);
                     let kc = key_of(vals[c as usize], m & 4 != 0);
-                    sink(gf128::mul(ka, kb) ^ mul_delta.mul(kc));
+                    sink(gf128::mul_public(ka, kb) ^ mul_delta.mul(kc));
                     continue;
                 }
             };

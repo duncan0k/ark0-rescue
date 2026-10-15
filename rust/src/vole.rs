@@ -10,6 +10,7 @@ use crate::bits;
 use crate::params::MAX_DEPTH;
 use crate::sym::{Tag, Xof};
 use crate::vc::Seed;
+use zeroize::Zeroize;
 
 /// r_{i,j}: the first lhat bits of SHAKE256[exp](iv || u8(i) || u16le(N + j) || sd)
 /// for leaf j of tree i, which has depth `depth` and N = 2^depth leaves.
@@ -49,10 +50,18 @@ fn xor_step(v: &mut [u8], cur: &mut [u8], left: &[u8]) {
 }
 
 /// Scratch space for `convert`: one pending left subtree per level and the
-/// current one.
+/// current one. It holds leaf expansions (secret on the prover side) and is
+/// zeroized when dropped.
 pub struct ConvertScratch {
     stack: Vec<Vec<u8>>,
     cur: Vec<u8>,
+}
+
+impl Drop for ConvertScratch {
+    fn drop(&mut self) {
+        self.stack.zeroize();
+        self.cur.zeroize();
+    }
 }
 
 impl ConvertScratch {

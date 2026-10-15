@@ -308,7 +308,7 @@ mod tests {
     use super::*;
     use crate::gf128::{self, FixedMul};
     use crate::sha256;
-    use crate::unihash::{ZkAcc, ZkHash};
+    use crate::unihash::{CtMul, ZkAcc, ZkHash};
 
     fn bits_of_words(words: &[u32]) -> Vec<u8> {
         words
@@ -409,7 +409,7 @@ mod tests {
         for chunk in chall2.chunks_exact_mut(16) {
             chunk.copy_from_slice(&rand().to_le_bytes());
         }
-        let zk = ZkHash::new(&chall2);
+        let zk = ZkHash::<CtMul>::new(&chall2);
         let zkh = |terms: &[u128], mask: u128| {
             let mut acc = ZkAcc::default();
             for &v in terms {

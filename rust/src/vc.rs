@@ -8,6 +8,7 @@
 
 use crate::params::{COM_BYTES, MAX_DEPTH, MAX_LEAVES, SEED_BYTES};
 use crate::sym::{Tag, Xof};
+use zeroize::Zeroize;
 
 pub type Seed = [u8; SEED_BYTES];
 pub type Com = [u8; COM_BYTES];
@@ -20,7 +21,7 @@ pub const fn opening_len(depth: usize) -> usize {
 /// Children of node n: SHAKE256[ggm](iv || u8(i) || u16le(n) || seed_n, 32).
 #[inline]
 fn expand(iv: &[u8; 16], tree: u8, node: usize, seed: &Seed) -> (Seed, Seed) {
-    let out: [u8; 2 * SEED_BYTES] = Xof::new(Tag::Ggm)
+    let mut out: [u8; 2 * SEED_BYTES] = Xof::new(Tag::Ggm)
         .update(iv)
         .update(&[tree])
         .update(&(node as u16).to_le_bytes())
@@ -30,6 +31,7 @@ fn expand(iv: &[u8; 16], tree: u8, node: usize, seed: &Seed) -> (Seed, Seed) {
     let mut r = [0u8; SEED_BYTES];
     l.copy_from_slice(&out[..SEED_BYTES]);
     r.copy_from_slice(&out[SEED_BYTES..]);
+    out.zeroize();
     (l, r)
 }
 
@@ -37,7 +39,7 @@ fn expand(iv: &[u8; 16], tree: u8, node: usize, seed: &Seed) -> (Seed, Seed) {
 /// with `node` = N + j.
 #[inline]
 fn leaf(iv: &[u8; 16], tree: u8, node: usize, seed: &Seed) -> (Seed, Com) {
-    let out: [u8; SEED_BYTES + COM_BYTES] = Xof::new(Tag::Leaf)
+    let mut out: [u8; SEED_BYTES + COM_BYTES] = Xof::new(Tag::Leaf)
         .update(iv)
         .update(&[tree])
         .update(&(node as u16).to_le_bytes())
@@ -47,6 +49,7 @@ fn leaf(iv: &[u8; 16], tree: u8, node: usize, seed: &Seed) -> (Seed, Com) {
     let mut com = [0u8; COM_BYTES];
     sd.copy_from_slice(&out[..SEED_BYTES]);
     com.copy_from_slice(&out[SEED_BYTES..]);
+    out.zeroize();
     (sd, com)
 }
 
@@ -56,7 +59,8 @@ fn copath(depth: usize, jstar: usize, d: usize) -> usize {
     (((1 << depth) + jstar) >> (depth - d)) ^ 1
 }
 
-/// Prover side: the expanded tree of one root.
+/// Prover side: the expanded tree of one root. Its node and leaf seeds are
+/// zeroized when it is dropped.
 pub struct Tree {
     pub hash: [u8; 32],
     depth: usize,
@@ -90,6 +94,14 @@ pub fn commit(root: &Seed, iv: &[u8; 16], tree: u8, depth: usize) -> Tree {
         nodes,
         sds,
         coms,
+    }
+}
+
+impl Drop for Tree {
+    fn drop(&mut self) {
+        self.nodes.zeroize();
+        self.sds.zeroize();
+        self.coms.zeroize();
     }
 }
 
