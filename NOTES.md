@@ -89,8 +89,8 @@ code less independently than the internal review's re-implementation did.
   multiplication tables), plus about 8 MB for the circuit, built once per
   process (8–10 ms).
 - **Prover.** Reproduces the Python proofs byte for byte from the same ρ (the
-  4 vectors and the 100 differential cases). Since branch
-  `cloud/t3-ct-prover` (finding F7) its GF(2^128) arithmetic and control flow
+  4 vectors and the 100 differential cases). Since 2026-10-15
+  (finding F7) its GF(2^128) arithmetic and control flow
   on secret data are constant time and it zeroizes its secrets; see
   `rust/CT-AUDIT.md` for what was checked, the dudect results and what
   remains. The Python reference is unchanged and still test-only.

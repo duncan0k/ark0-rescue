@@ -3,7 +3,7 @@
 Finding F7 of the 2026-10-14 internal review: the prover multiplied in
 GF(2^128) with 64 KiB tables (and 16-entry windows) indexed by secret data,
 and it did not zeroize secrets. This document records what was changed on
-branch `cloud/t3-ct-prover`, what was checked, the timing-test results and
+2026-10-15, what was checked, the timing-test results and
 what remains open. It does not change the protocol, SPEC.md or the Python
 reference. Every proof is byte-identical to before (all KAT and differential
 vectors reproduce with the same fixed ρ).
