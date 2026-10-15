@@ -19,6 +19,10 @@ pub const S1_WITNESS_LEN: usize = 32;
 const S1_MAX_KEY_LEN: usize = 64;
 /// Public bits: IV_in (256) | IV_out (256) | T (256) | suffix (8).
 const S1_N_PUBLIC: usize = 256 * 3 + 8;
+/// Witness bits of the statement 0x01 circuit (SPEC.md §7.5). The proof
+/// layout needs only this number, so no format check builds the circuit; a
+/// test compares it with the built circuit.
+const S1_N_WITNESS: usize = 42_071;
 
 /// Parsed statement 0x01 public inputs.
 #[derive(Clone, Copy, Debug)]
@@ -109,7 +113,6 @@ pub fn s1_hmac(key: &[u8], suffix: u8, x: &[u8]) -> [u8; 32] {
 pub struct Layout {
     pub split: TreeSplit,
     pub ell: usize,
-    pub n_constraints: usize,
     pub lhat: usize,
     pub c_bytes: usize,
     pub d_bytes: usize,
@@ -124,8 +127,8 @@ pub struct Layout {
 }
 
 impl Layout {
-    pub fn new(circuit: &Circuit, split: TreeSplit) -> Self {
-        let ell = circuit.n_witness;
+    /// The layout for `ell` witness bits under `split`.
+    pub const fn new(ell: usize, split: TreeSplit) -> Self {
         let lhat = ell + QS_MASK_BITS + VH_MASK_BITS;
         let c_bytes = nbytes(lhat);
         let d_bytes = nbytes(ell);
@@ -139,7 +142,6 @@ impl Layout {
         Layout {
             split,
             ell,
-            n_constraints: circuit.n_constraints,
             lhat,
             c_bytes,
             d_bytes,
@@ -161,23 +163,37 @@ impl Layout {
     }
 }
 
-/// A registered statement: its circuit and its proof layout under SPLIT.
-pub struct StatementDef {
-    pub circuit: Circuit,
-    pub layout: Layout,
+/// The proof layout of a registered statement id under `split`, from fixed
+/// sizes only: no circuit is built.
+pub const fn layout_for(statement_id: u8, split: TreeSplit) -> Option<Layout> {
+    match statement_id {
+        STATEMENT1_ID => Some(Layout::new(S1_N_WITNESS, split)),
+        _ => None,
+    }
 }
 
-static STATEMENT1: OnceLock<StatementDef> = OnceLock::new();
+/// The proof layout of a registered statement id under SPLIT (SPEC.md §10).
+pub const fn layout(statement_id: u8) -> Option<Layout> {
+    layout_for(statement_id, SPLIT)
+}
 
-/// The definition of a registered statement id (built once per process).
-pub fn lookup(statement_id: u8) -> Option<&'static StatementDef> {
+static STATEMENT1: OnceLock<Circuit> = OnceLock::new();
+
+/// The circuit of a registered statement id, built on first use (once per
+/// process). Callers run every format check first.
+pub fn circuit(statement_id: u8) -> Option<&'static Circuit> {
     match statement_id {
-        STATEMENT1_ID => Some(STATEMENT1.get_or_init(|| {
-            let circuit = gadgets::build_statement1_circuit();
-            let layout = Layout::new(&circuit, SPLIT);
-            StatementDef { circuit, layout }
-        })),
+        STATEMENT1_ID => Some(STATEMENT1.get_or_init(gadgets::build_statement1_circuit)),
         _ => None,
+    }
+}
+
+/// Whether the circuit of a statement id has been built in this process (for
+/// the test that malformed inputs never build it).
+pub fn circuit_is_built(statement_id: u8) -> bool {
+    match statement_id {
+        STATEMENT1_ID => STATEMENT1.get().is_some(),
+        _ => false,
     }
 }
 
@@ -196,8 +212,8 @@ pub struct CircuitInfo {
 }
 
 pub fn statement_circuit_info(statement_id: u8) -> Option<CircuitInfo> {
-    let def = lookup(statement_id)?;
-    let c = &def.circuit;
+    let lay = layout(statement_id)?;
+    let c = circuit(statement_id)?;
     Some(CircuitInfo {
         digest: c.digest(),
         n_public: c.n_public,
@@ -207,7 +223,7 @@ pub fn statement_circuit_info(statement_id: u8) -> Option<CircuitInfo> {
         n_and_secret_secret: c.n_mul,
         n_assert: c.n_assert,
         gate_counts: c.counts(),
-        proof_len: def.layout.total,
+        proof_len: lay.total,
     })
 }
 
@@ -243,5 +259,16 @@ mod tests {
         assert!(s1_encode_public(&[b'a'; 65], 0, &y).is_none());
         assert!(s1_encode_public(&[b'a'; 64], 0, &y).is_some());
         assert!(s1_encode_public(b"tab\there", 0, &y).is_none());
+    }
+
+    #[test]
+    fn fixed_layout_matches_the_circuit() {
+        let c = gadgets::build_statement1_circuit();
+        assert_eq!(c.n_witness, S1_N_WITNESS);
+        let lay = layout(STATEMENT1_ID).unwrap();
+        assert_eq!(lay, Layout::new(c.n_witness, SPLIT));
+        assert_eq!(lay.total, 130_218);
+        assert_eq!(layout(0), None);
+        assert_eq!(layout(2), None);
     }
 }

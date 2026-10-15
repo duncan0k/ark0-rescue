@@ -9,9 +9,10 @@
 #![forbid(unsafe_code)]
 
 use crate::bits;
+use crate::circuit::Circuit;
 use crate::gf128::{self, FixedMul};
 use crate::params::{LAMBDA, LAMBDA_BYTES, MAX_LEAVES, MAX_MESSAGE_LEN, RHO_BYTES, VERSION};
-use crate::statements::{self, Layout, StatementDef};
+use crate::statements::{self, Layout, STATEMENT1_ID};
 use crate::sym::{Tag, Xof};
 use crate::unihash::{VoleHash, ZkAcc, ZkHash};
 use crate::vc;
@@ -19,7 +20,7 @@ use crate::vole::{self, ConvertScratch};
 
 /// Proof length in bytes for a registered statement id.
 pub fn proof_length(statement_id: u8) -> Option<usize> {
-    statements::lookup(statement_id).map(|d| d.layout.total)
+    statements::layout(statement_id).map(|l| l.total)
 }
 
 /// mu = SHAKE256[mu](u8(version) || u8(sid) || u16le(|pub|) || pub || u64le(|m|) || m, 32).
@@ -67,16 +68,8 @@ pub struct VerifierTrace {
 /// True iff `proof` is a valid proof for (statement_id, public_inputs)
 /// bound to `message` (SPEC.md §11). Every malformed input yields false.
 pub fn verify(statement_id: u8, public_inputs: &[u8], message: &[u8], proof: &[u8]) -> bool {
-    match statements::lookup(statement_id) {
-        Some(def) => verify_impl(
-            def,
-            &def.layout,
-            statement_id,
-            public_inputs,
-            message,
-            proof,
-            None,
-        ),
+    match statements::layout(statement_id) {
+        Some(lay) => verify_impl(&lay, statement_id, public_inputs, message, proof, None),
         None => false,
     }
 }
@@ -89,14 +82,13 @@ pub fn verify_traced(
     message: &[u8],
     proof: &[u8],
 ) -> (bool, Option<VerifierTrace>) {
-    let Some(def) = statements::lookup(statement_id) else {
+    let Some(lay) = statements::layout(statement_id) else {
         return (false, None);
     };
     let mut trace = VerifierTrace::default();
     let mut reached = false;
     let ok = verify_impl(
-        def,
-        &def.layout,
+        &lay,
         statement_id,
         public_inputs,
         message,
@@ -106,9 +98,10 @@ pub fn verify_traced(
     (ok, if reached { Some(trace) } else { None })
 }
 
-/// Steps 2–11 for a registered statement (step 1) and a layout.
+/// Steps 2–11 for a registered statement id (step 1) and its layout. The
+/// format checks (steps 2–6) use fixed sizes only; the statement's circuit is
+/// built or looked up after them.
 fn verify_impl(
-    def: &StatementDef,
     lay: &Layout,
     statement_id: u8,
     public_inputs: &[u8],
@@ -116,8 +109,12 @@ fn verify_impl(
     proof: &[u8],
     trace: Option<(&mut VerifierTrace, &mut bool)>,
 ) -> bool {
-    // 2. Canonical public inputs.
-    let Some(parsed) = statements::s1_parse_public(public_inputs) else {
+    // 2. Canonical public inputs, by the rules of this statement id.
+    let parsed = match statement_id {
+        STATEMENT1_ID => statements::s1_parse_public(public_inputs),
+        _ => None,
+    };
+    let Some(parsed) = parsed else {
         return false;
     };
     // 3. Message length.
@@ -142,9 +139,12 @@ fn verify_impl(
     if !bits::is_canonical(&proof[lay.off_d..lay.off_d + lay.d_bytes], lay.ell) {
         return false;
     }
+    let Some(circuit) = statements::circuit(statement_id) else {
+        return false;
+    };
     let public_bits = statements::s1_public_bits(&parsed);
     verify_core(
-        def,
+        circuit,
         lay,
         statement_id,
         public_inputs,
@@ -155,11 +155,12 @@ fn verify_impl(
     )
 }
 
-/// Steps 7–11 on an input that passed the format checks; the work does not
-/// depend on the proof contents.
+/// Steps 7–11 on an input that passed the format checks. The work is
+/// bounded and independent of secret data, but not constant: each set bit of
+/// Delta adds an XOR of u_tilde and of d and, outside tree 0, of a correction.
 #[allow(clippy::too_many_arguments)]
 fn verify_core(
-    def: &StatementDef,
+    circuit: &Circuit,
     lay: &Layout,
     statement_id: u8,
     public_inputs: &[u8],
@@ -264,10 +265,9 @@ fn verify_core(
     let zk = ZkHash::new(&chall2);
     let mul_delta = FixedMul::new(delta);
     let mut acc = ZkAcc::default();
-    def.circuit
-        .verifier_terms(public_bits, &rows[..ell], delta, &mul_delta, |b| {
-            zk.absorb(&mut acc, b)
-        });
+    circuit.verifier_terms(public_bits, &rows[..ell], delta, &mul_delta, |b| {
+        zk.absorb(&mut acc, b)
+    });
     let q_tilde = zk.finish(&acc, mask_element(&rows[ell..]));
     let b_tilde = gf128::to_bytes(q_tilde ^ gf128::mul(gf128::from_bytes(&a_tilde), delta));
 
@@ -347,10 +347,9 @@ pub fn prove(
     message: &[u8],
     rho: &[u8; RHO_BYTES],
 ) -> Result<Vec<u8>, ProveError> {
-    let def = statements::lookup(statement_id).ok_or(ProveError::UnknownStatement)?;
+    let lay = statements::layout(statement_id).ok_or(ProveError::UnknownStatement)?;
     prove_impl(
-        def,
-        &def.layout,
+        &lay,
         statement_id,
         public_inputs,
         witness,
@@ -371,11 +370,10 @@ pub fn prove_traced(
     message: &[u8],
     rho: &[u8; RHO_BYTES],
 ) -> Result<(Vec<u8>, ProverTrace), ProveError> {
-    let def = statements::lookup(statement_id).ok_or(ProveError::UnknownStatement)?;
+    let lay = statements::layout(statement_id).ok_or(ProveError::UnknownStatement)?;
     let mut trace = ProverTrace::default();
     let proof = prove_impl(
-        def,
-        &def.layout,
+        &lay,
         statement_id,
         public_inputs,
         witness,
@@ -386,9 +384,7 @@ pub fn prove_traced(
     Ok((proof, trace))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn prove_impl(
-    def: &StatementDef,
     lay: &Layout,
     statement_id: u8,
     public_inputs: &[u8],
@@ -397,8 +393,11 @@ fn prove_impl(
     rho: &[u8; RHO_BYTES],
     trace: Option<&mut ProverTrace>,
 ) -> Result<Vec<u8>, ProveError> {
-    let parsed =
-        statements::s1_parse_public(public_inputs).ok_or(ProveError::MalformedPublicInputs)?;
+    let parsed = match statement_id {
+        STATEMENT1_ID => statements::s1_parse_public(public_inputs),
+        _ => None,
+    }
+    .ok_or(ProveError::MalformedPublicInputs)?;
     if message.len() > MAX_MESSAGE_LEN {
         return Err(ProveError::MessageTooLong);
     }
@@ -408,9 +407,9 @@ fn prove_impl(
     if &statements::s1_hmac(parsed.key, parsed.suffix, witness) != parsed.y {
         return Err(ProveError::RelationFails);
     }
+    let circ = statements::circuit(statement_id).ok_or(ProveError::UnknownStatement)?;
     let split = lay.split;
     let tau = split.tau();
-    let circ = &def.circuit;
     let (ell, lhat, cb) = (lay.ell, lay.lhat, lay.c_bytes);
     let public_bits = statements::s1_public_bits(&parsed);
     let (_, w_bits, ok) = circ.evaluate(&public_bits, &statements::s1_secret_bits(witness));
@@ -560,12 +559,11 @@ fn prove_impl(
 pub mod bench {
     use super::{prove_impl, verify_impl, ProveError};
     use crate::params::{TreeSplit, RHO_BYTES};
-    use crate::statements::{self, Layout};
+    use crate::statements;
 
     /// Proof length for a registered statement id under `split`.
     pub fn proof_length(split: TreeSplit, statement_id: u8) -> Option<usize> {
-        let def = statements::lookup(statement_id)?;
-        Some(Layout::new(&def.circuit, split).total)
+        statements::layout_for(statement_id, split).map(|l| l.total)
     }
 
     /// `verify` under `split`.
@@ -576,11 +574,10 @@ pub mod bench {
         message: &[u8],
         proof: &[u8],
     ) -> bool {
-        let Some(def) = statements::lookup(statement_id) else {
-            return false;
-        };
-        let lay = Layout::new(&def.circuit, split);
-        verify_impl(def, &lay, statement_id, public_inputs, message, proof, None)
+        match statements::layout_for(statement_id, split) {
+            Some(lay) => verify_impl(&lay, statement_id, public_inputs, message, proof, None),
+            None => false,
+        }
     }
 
     /// `prove` under `split`.
@@ -592,10 +589,9 @@ pub mod bench {
         message: &[u8],
         rho: &[u8; RHO_BYTES],
     ) -> Result<Vec<u8>, ProveError> {
-        let def = statements::lookup(statement_id).ok_or(ProveError::UnknownStatement)?;
-        let lay = Layout::new(&def.circuit, split);
+        let lay =
+            statements::layout_for(statement_id, split).ok_or(ProveError::UnknownStatement)?;
         prove_impl(
-            def,
             &lay,
             statement_id,
             public_inputs,

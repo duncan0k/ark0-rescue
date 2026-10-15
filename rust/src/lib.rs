@@ -42,7 +42,9 @@ pub use proof::bench;
 /// Facts about a statement's circuit, for tests and tools.
 pub mod circuit_info {
     pub use crate::circuit::GateCounts;
-    pub use crate::statements::{compression_circuit_digest, statement_circuit_info, CircuitInfo};
+    pub use crate::statements::{
+        circuit_is_built, compression_circuit_digest, statement_circuit_info, CircuitInfo,
+    };
 }
 
 /// SHA-256 and HMAC-SHA256 (FIPS 180-4, RFC 2104), as used for the public
