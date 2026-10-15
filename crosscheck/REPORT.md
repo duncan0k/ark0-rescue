@@ -122,7 +122,8 @@ There are 8 tests per case (800 in total):
 
 ## 4. Fuzzing the new verifier
 
-The harness is `origin/cloud/t1-fuzz:rust/fuzz`, copied to `crosscheck/fuzz/`.
+The harness is `rust/fuzz/` of branch `fuzz` (the 2026-10-15 fuzzing work), copied to
+`crosscheck/fuzz/`.
 
 - The only change is the dependency `voleith = { path = "../../rust" }`.
   `Cargo.lock` also picked up `zeroize 1.8.2` from this branch.
