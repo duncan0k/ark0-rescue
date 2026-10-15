@@ -91,6 +91,9 @@ class TestCircuit(unittest.TestCase):
         self.assertEqual(c.n_assert, S1_ASSERT)
         self.assertEqual(c.n_witness, S1_WITNESS_BITS)
         self.assertEqual(c.n_constraints, S1_MUL + S1_ASSERT)
+        # The proof layout uses this constant instead of the circuit.
+        self.assertEqual(st.S1_N_WITNESS, c.n_witness)
+        self.assertEqual(st.REGISTRY[st.STATEMENT1_ID].n_witness, c.n_witness)
 
     def test_valid_witness_satisfies(self):
         for suffix in (0, 1, 2, 255):

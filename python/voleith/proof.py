@@ -21,12 +21,12 @@ from .unihash import VoleHash, ZkHash
 
 class Layout:
     """Field sizes and offsets of a proof for one statement id and tree split
-    (SPEC.md §10)."""
+    (SPEC.md §10). They depend only on the number of witness bits `ell`, so
+    no format check needs the statement's circuit."""
 
-    def __init__(self, circuit, split):
+    def __init__(self, ell, split):
         self.split = split
-        self.ell = circuit.n_witness
-        self.n_constraints = circuit.n_constraints
+        self.ell = ell
         self.lhat = self.ell + QS_MASK_BITS + VH_MASK_BITS
         self.c_bytes = bits.nbytes(self.lhat)
         self.d_bytes = bits.nbytes(self.ell)
@@ -54,9 +54,10 @@ _LAYOUTS = {}
 
 
 def layout(statement_id, split=SPLIT):
+    """The layout of a registered statement id; builds no circuit."""
     key = (statement_id, split.tau)
     if key not in _LAYOUTS:
-        _LAYOUTS[key] = Layout(REGISTRY[statement_id].circuit(), split)
+        _LAYOUTS[key] = Layout(REGISTRY[statement_id].n_witness, split)
     return _LAYOUTS[key]
 
 
@@ -235,6 +236,7 @@ def _verify_impl(statement, message, proof, split):
     d = bits.decode(proof[lay.off_d:lay.off_d + lay.d_bytes], lay.ell)
     if d is None:
         return False
+    # Only now is the circuit built (once per process), in _verify_core.
     return _verify_core(statement, parsed, sdef, lay, message, proof, corrections, d)
 
 

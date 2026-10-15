@@ -149,6 +149,31 @@ class TestProofEndToEnd(unittest.TestCase):
                     p + b"\x00", p + p[:16], p + bytes(1000)):
             self.assertRejects(self.stmt, self.msg, bad, len(bad))
 
+    def test_format_checks_do_not_build_the_circuit(self):
+        """Malformed inputs are rejected before the circuit is built (SPEC
+        §11), so the first call in a process does not pay for it."""
+        lay = self.lay
+        bad_proofs = (b"", self.proof[:-1], self.proof + b"\x00", flip(self.proof, 0),
+                      flip(self.proof, 1), flip(self.proof, lay.off_c + lay.c_bytes - 1, 0x80),
+                      flip(self.proof, lay.off_d + lay.d_bytes - 1, 0x80))
+        saved = st._Statement1._circuit
+        st._Statement1._circuit = None
+        P._LAYOUTS.clear()
+        try:
+            for bad in bad_proofs:
+                self.assertRejects(self.stmt, self.msg, bad)
+            self.assertRejects(voleith.Statement(2, self.stmt.public_inputs), self.msg,
+                               self.proof)
+            self.assertRejects(voleith.Statement(1, self.stmt.public_inputs[1:]), self.msg,
+                               self.proof)
+            self.assertRejects(self.stmt, bytes(MAX_MESSAGE_LEN + 1), self.proof)
+            self.assertIsNone(st._Statement1._circuit)
+            # A structurally valid input builds it.
+            self.assertTrue(voleith.verify(self.stmt, self.msg, self.proof))
+            self.assertIsNotNone(st._Statement1._circuit)
+        finally:
+            st._Statement1._circuit = saved
+
     def test_garbage_of_correct_length(self):
         rnd = random.Random(33)
         body = rnd.randbytes(PROOF_LEN - 2)

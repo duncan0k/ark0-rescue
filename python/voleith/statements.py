@@ -29,6 +29,10 @@ S1_WITNESS_LEN = 32
 S1_MAX_KEY_LEN = 64
 # Public bits: IV_in (256) | IV_out (256) | T (256) | suffix (8).
 S1_N_PUBLIC = 256 * 3 + 8
+# Witness bits of the statement 0x01 circuit (SPEC.md §7.5). The proof layout
+# needs only this number, so no format check builds the circuit; a test
+# compares it with the built circuit.
+S1_N_WITNESS = 42071
 
 
 def s1_encode_public(key, suffix, y):
@@ -117,6 +121,7 @@ def build_statement1_circuit():
 class _Statement1:
     statement_id = STATEMENT1_ID
     witness_len = S1_WITNESS_LEN
+    n_witness = S1_N_WITNESS
     _circuit = None
 
     def circuit(self):
