@@ -22,7 +22,7 @@ the spec owner after that review.
 | `gf128::mul_portable` | prover on CPUs without PCLMULQDQ | yes | bit-serial: 3 × 64 iterations of shift, mask `0 - bit`, XOR (Karatsuba), shift-only reduction |
 | `gf128::mul_x`, `reduce` | both | yes | fixed shifts; `mul_x` masks instead of multiplying |
 | `gf128::mul_public`, `FixedMul` | verifier only | only on CLMUL CPUs | on CLMUL CPUs they are `gf128::mul`; otherwise the old 4-bit-window multiply and 64 KiB tables (public data only) |
-| `unihash::CtMul` / `FixedMul` | `VoleHash<M>`, `ZkHash<M>` | — | the hashes are generic over the key multiplier: the prover instantiates `CtMul`, the verifier `FixedMul`. The prover never reaches a table, and the type system enforces it |
+| `unihash::CtMul` / `FixedMul` | `VoleHash<M>`, `ZkHash<M>` | — | the hashes are generic over the key multiplier: the prover instantiates `CtMul` explicitly (`proof.rs`, `VoleHash::<CtMul>` and `ZkHash::<CtMul>`), the verifier `FixedMul`. The type system does not enforce this: `FixedMul` also implements `KeyMul`, so swapping it in would still compile. That the prover reaches no table rests on the explicit instantiation and on the review of its call paths (§2) |
 
 The only CPU-dependent choice is whether PCLMULQDQ is present. It depends on
 the CPU, never on data. Both paths give identical products: unit tests compare

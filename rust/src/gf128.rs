@@ -14,7 +14,9 @@
 //! (it is faster than tables there); without it they fall back to
 //! table-driven code that is not constant time (the operand indexes the
 //! tables), because the portable constant-time multiplication is about four
-//! times slower. The prover never calls them.
+//! times slower. The prover does not call them: it uses [`mul`] and
+//! `unihash::CtMul` explicitly, and its call paths were reviewed
+//! (rust/CT-AUDIT.md §2). Nothing in the types prevents a call.
 
 #![forbid(unsafe_code)]
 

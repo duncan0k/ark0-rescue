@@ -1,8 +1,12 @@
 //! The universal hashes of the two consistency checks (SPEC.md §5.4, §6.3).
 //!
 //! Both are generic over how their public keys multiply: the prover, which
-//! hashes secret data, uses [`CtMul`] (constant time); the verifier uses
-//! [`FixedMul`] (public data only, possibly table-driven).
+//! hashes secret data, instantiates [`CtMul`] (constant time) explicitly;
+//! the verifier uses [`FixedMul`] (public data only, possibly table-driven).
+//! The type system does not keep the prover off the tables: `FixedMul` also
+//! implements [`KeyMul`], so instantiating it in the prover would compile.
+//! The explicit `CtMul` and the review of the prover's call paths
+//! (rust/CT-AUDIT.md §2) are what keep it constant time.
 
 #![forbid(unsafe_code)]
 
@@ -17,7 +21,8 @@ pub trait KeyMul {
     fn mul(&self, x: u128) -> u128;
 }
 
-/// Constant-time multiplication by a key, for secret operands.
+/// Constant-time multiplication by a key, for secret operands. The prover
+/// must name it explicitly; nothing stops a `FixedMul` in its place.
 pub struct CtMul(u128);
 
 impl KeyMul for CtMul {
