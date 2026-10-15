@@ -127,15 +127,22 @@ the exact count, and `s1_secret_bits` no longer collects from an iterator
 with an unknown size. So no reallocation leaves an unzeroized copy behind on
 the heap.
 
-After `prove_impl` returns, `prove` (and `prove_traced`) calls
-`scrub_stack`, which overwrites 64 KiB of the stack below the caller's frame
-with volatile writes. This covers the frames where seeds, hash states and
-field elements were held.
+Every prover entry point (`prove`, `prove_traced` and, with the
+`bench-splits` feature, `bench::prove`) goes through one internal function,
+`prove_scrubbed`. It calls `prove_impl` and then, on every return (`Ok` and
+`Err`), `scrub_stack`, which overwrites 64 KiB of the stack below its own
+frame with volatile writes. This covers the frames where seeds, hash states
+and field elements were held. `prove_impl` is `#[inline(never)]`: inlined
+into `prove_scrubbed`, its secrets would sit in the caller's own frame, which
+the scrub (a callee) cannot reach.
 
 **Residual (known gaps):**
 - **The stack scrub is best effort.** Frame layout is the compiler's choice,
   and registers or vector registers can hold secrets until reused. Signal
   handlers and other threads are out of scope.
+- **A panic skips the stack scrub.** A panic inside `prove_impl` unwinds past
+  `scrub_stack` (release builds keep `panic = "unwind"`). Heap secrets are
+  still cleared by their destructors during unwinding; the stack is not.
 - **`digest 0.10`'s block buffer** (up to 135 bytes of absorbed input, e.g.
   the witness absorbed into `rnd`) and the XOF reader's output buffer (e.g.
   the tail of the root-seed output) have no zeroize support. They live in

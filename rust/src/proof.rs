@@ -367,7 +367,7 @@ pub fn prove(
     rho: &[u8; RHO_BYTES],
 ) -> Result<Vec<u8>, ProveError> {
     let lay = statements::layout(statement_id).ok_or(ProveError::UnknownStatement)?;
-    let res = prove_impl(
+    prove_scrubbed(
         &lay,
         statement_id,
         public_inputs,
@@ -375,13 +375,45 @@ pub fn prove(
         message,
         rho,
         None,
+    )
+}
+
+/// The one way into `prove_impl`: every prover entry point (`prove`,
+/// `prove_traced`, `bench::prove`) goes through here, so the stack is
+/// scrubbed after every return of `prove_impl`, `Ok` and `Err` alike.
+///
+/// `prove_impl` is `#[inline(never)]`: if it were inlined here, its secrets
+/// would sit in this function's own frame, which `scrub_stack` (a callee,
+/// whose frame lies below this one) cannot reach.
+///
+/// A panic inside `prove_impl` unwinds past `scrub_stack`: heap secrets are
+/// still cleared by their destructors during unwinding, but the stack is not
+/// scrubbed on that path.
+fn prove_scrubbed(
+    lay: &Layout,
+    statement_id: u8,
+    public_inputs: &[u8],
+    witness: &[u8],
+    message: &[u8],
+    rho: &[u8; RHO_BYTES],
+    trace: Option<&mut ProverTrace>,
+) -> Result<Vec<u8>, ProveError> {
+    let res = prove_impl(
+        lay,
+        statement_id,
+        public_inputs,
+        witness,
+        message,
+        rho,
+        trace,
     );
     scrub_stack();
     res
 }
 
-/// Overwrite with zeros the stack below the caller's frame, where the frames
-/// of `prove_impl` and its callees held copies of secrets (seeds, hash
+/// Overwrite with zeros the stack below the caller's (`prove_scrubbed`'s)
+/// frame, where the frames of `prove_impl` and its callees held copies of
+/// secrets (seeds, hash
 /// states, field elements). Best effort: the compiler decides frame layout,
 /// so this covers `SCRUB_BYTES` below this frame and nothing else.
 #[inline(never)]
@@ -405,7 +437,7 @@ pub fn prove_traced(
 ) -> Result<(Vec<u8>, ProverTrace), ProveError> {
     let lay = statements::layout(statement_id).ok_or(ProveError::UnknownStatement)?;
     let mut trace = ProverTrace::default();
-    let proof = prove_impl(
+    let proof = prove_scrubbed(
         &lay,
         statement_id,
         public_inputs,
@@ -414,10 +446,12 @@ pub fn prove_traced(
         rho,
         Some(&mut trace),
     );
-    scrub_stack();
     Ok((proof?, trace))
 }
 
+/// The prover itself. Call it only through `prove_scrubbed`; never inline it
+/// (see there).
+#[inline(never)]
 fn prove_impl(
     lay: &Layout,
     statement_id: u8,
@@ -602,7 +636,7 @@ fn prove_impl(
 /// split other than `params::SPLIT`.
 #[cfg(feature = "bench-splits")]
 pub mod bench {
-    use super::{prove_impl, verify_impl, ProveError};
+    use super::{prove_scrubbed, verify_impl, ProveError};
     use crate::params::{TreeSplit, RHO_BYTES};
     use crate::statements;
 
@@ -625,7 +659,7 @@ pub mod bench {
         }
     }
 
-    /// `prove` under `split`.
+    /// `prove` under `split`, with the same stack scrub as `prove`.
     pub fn prove(
         split: TreeSplit,
         statement_id: u8,
@@ -636,7 +670,7 @@ pub mod bench {
     ) -> Result<Vec<u8>, ProveError> {
         let lay =
             statements::layout_for(statement_id, split).ok_or(ProveError::UnknownStatement)?;
-        prove_impl(
+        prove_scrubbed(
             &lay,
             statement_id,
             public_inputs,
