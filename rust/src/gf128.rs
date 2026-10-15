@@ -313,7 +313,10 @@ mod tests {
         assert_eq!(to_bytes(fm.mul(from_bytes(&x1))), want);
         let fm = FixedMul::new_tables(from_bytes(&x127));
         assert_eq!(to_bytes(fm.mul(from_bytes(&x1))), want);
-        assert_eq!(to_bytes(mul_portable(from_bytes(&x127), from_bytes(&x1))), want);
+        assert_eq!(
+            to_bytes(mul_portable(from_bytes(&x127), from_bytes(&x1))),
+            want
+        );
     }
 
     #[test]

@@ -438,7 +438,10 @@ fn prove_impl(
     if witness.len() != statements::S1_WITNESS_LEN {
         return Err(ProveError::BadWitnessLength);
     }
-    if !ct_eq(&statements::s1_hmac(parsed.key, parsed.suffix, witness), parsed.y) {
+    if !ct_eq(
+        &statements::s1_hmac(parsed.key, parsed.suffix, witness),
+        parsed.y,
+    ) {
         return Err(ProveError::RelationFails);
     }
     let circ = statements::circuit(statement_id).ok_or(ProveError::UnknownStatement)?;
