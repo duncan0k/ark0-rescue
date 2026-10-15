@@ -534,8 +534,10 @@ none overlapped minutes x4 or x5 or another workload's six-hourly job
   degree-≤6 E3 encoding of R1 and a degree-d QuickSilver check, which v0.1
   does not have. R1 estimates the proof at about 296 kB.
 - **Rust.** Verifier, prover and differential tests are done (see "Rust
-  verifier"). Still open: fuzzing of the verifier, and an independent
-  review of the constant-time Rust prover (`rust/CT-AUDIT.md`).
+  verifier"). The verifier was fuzzed, and the constant-time prover passed
+  three rounds of AI code review and an independent cross-check (section
+  "2026-10-15 work branches"). Still open: a human review of the
+  constant-time prover before any real seed is used (`rust/CT-AUDIT.md`).
 - **Core integration.** Annex TLV, rescue sighash with `key_version = 0x03`,
   the rescue token, validation weight and policy (M4-R design).
 - **Review.** Two internal reviews are done (section "2026-10-14 internal
@@ -564,8 +566,7 @@ none overlapped minutes x4 or x5 or another workload's six-hourly job
 
 Six cloud sessions on 2026-10-15 produced five branches. Their commits
 were replayed under this repository's identity, with the same trees.
-Nothing from them is in `main` yet. One integration run will merge them,
-then rerun every test.
+All five are merged into `main`; see "Integration (2026-10-15)".
 
 | Branch | What | State |
 |---|---|---|
@@ -733,7 +734,7 @@ constant-time verifier, with the same result.
 
 ## Integration (2026-10-15)
 
-Branch `cloud/t7-integrate`, from `main` at `a405ac5`.
+Merged into `main` on 2026-10-15, from `a405ac5`.
 
 - **How the inputs went in.**
   - `ct-prover`, `spec-rev2`, `fuzz` and `crosscheck` are merged in that
