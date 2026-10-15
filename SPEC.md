@@ -33,9 +33,12 @@ Boolean constraint layer, and defines one statement:
 > **Statement 0x01.** The prover knows a 32-byte seed `x` such that
 > `HMAC-SHA256(K, x ‖ suffix) = y`, for public `K`, `suffix` and `y`.
 
-The Python package in `python/voleith` is the executable form of this
-specification. Where this text and the code disagree, that is a bug in one of
-them; `vectors/statement1-v0.2.json` pins the intended behaviour.
+This text and the vector files of Appendix A define the protocol. An
+implementation needs nothing else. The Python package in `python/voleith` is
+the reference implementation. Where this text and the reference disagree,
+that is a bug in one of them, and the vectors pin the intended behaviour.
+References to `NOTES.md` (measurements, history) and to code are informative;
+no conformance requirement depends on them.
 
 Sources: the approved plan `R1-voleith-plan.md`, the rescue-lane interface in
 `m4-design-2026-10-14.md` §11 and the owner decisions in `m4-plan-2026-10-14.md`
@@ -75,16 +78,35 @@ references are listed in §17.
 - `ℓ` is the number of witness bits of a statement and `ℓ̂ = ℓ + 3λ` the VOLE
   length (§5).
 
+Some letters have more than one meaning; the section in which a symbol
+appears fixes its meaning:
+
+| symbol | meanings |
+|---|---|
+| `s`, `t` | VH keys from `chall1` (§5.4); ZKH keys from `chall2` (§6.3). `t` is also the constraint index (§6.2, §7.2) and the schedule and round index of `compress` (§7.4) |
+| `r` | root seed (§8); row index (§5.3). `r_i` are tree roots (§4.1), `r_{i,j}` leaf expansions (§5.1), `r0`, `r1` ZKH keys (§6.3) |
+| `c` | `c_i` VOLE corrections (§5.3); third wire of a constraint `a·b = c` (§6.2); `c[i]` carries (§7.4); a state word of `compress` (§7.4) |
+| `d` | masked witness (§6.1); GGM depth index (§4.3); a state word of `compress` (§7.4); Schnorr secret key (§12.1) |
+| `w` | extended witness (§6.1, §7.2); a wire in `β_w`, `v_w`, `q_w` (§6.2); a word index (§7.4, §7.5) |
+| `C` | number of constraints (§6.3, §7.2); `C(τ,2)` is a binomial coefficient (§5.4, §13.2) |
+| `S` | number of secret inputs (§7.1); a set of trees (§13.2) |
+| `P` | number of public inputs (§7.1); the x-only output key (§12.1); a number of machines (§13.6) |
+| `Q` | verifier's VOLE columns `Q_j` (§5.3); random-oracle query counts (§13.2) |
+| `K` | HMAC key (§7.5); `K_t` SHA-256 round constants (§7.4) |
+| `m` | the message (§3.2, §8, §11); the index of a MUL in `w[S+m]` (§7.2) |
+| `n` | a length in bits (§1.2); a GGM node index (§3.2, §4); a rotation (§7.4); the instruction count (§7.6); the secp256k1 group order (§12.1) |
+
 ### 1.2 Bit strings
 
 A bit string `b[0..n)` is identified with the non-negative integer
 `Σ b[i]·2^i`. Its byte encoding `enc_n(b)` has `⌈n/8⌉` bytes; bit `i` is bit
 `i mod 8` (least significant first) of byte `⌊i/8⌋`. If `n` is not a multiple of
 8, the unused high bits of the last byte are **padding bits and must be zero**;
-a decoder rejects any non-zero padding bit.
+a decoder of a proof field rejects any non-zero padding bit (§11 step 6).
 
-Taking "the first `n` bits" of a byte string means decoding it with this rule
-and discarding bits at positions `≥ n`.
+Taking "the first `n` bits" of a hash output means reading it in this bit
+order and discarding the bits at positions `≥ n`. No padding check applies
+to a hash output.
 
 ### 1.3 The field GF(2^128)
 
@@ -124,11 +146,11 @@ split"). v0.1 used R1's `τ = 16`, `k = 8`; no grinding in either. For statement
 Every hash, PRG and random-oracle call is
 
 ```
-SHAKE256[name](data, L) = SHAKE256( u8(|T|) ‖ T ‖ data , L bytes ),
-T = ASCII "VOLEitH-rescue/v0.2/" ‖ name
+SHAKE256[name](data, L) = SHAKE256( u8(|tag|) ‖ tag ‖ data , L bytes ),
+tag = ASCII "VOLEitH-rescue/v0.2/" ‖ name
 ```
 
-The tag `T` contains the protocol version, so a new version changes every call.
+The tag contains the protocol version, so a new version changes every call.
 Within one name, `data` is a concatenation of fields whose lengths are fixed by
 the protocol and the statement id, or that carry an explicit length prefix, so
 each input encoding is injective.
@@ -149,10 +171,12 @@ each input encoding is injective.
 | `ch1` | `μ ‖ hcom ‖ enc(c_1) ‖ … ‖ enc(c_23) ‖ iv_pre` | 32 | `chall1` (`H_2^1`) |
 | `hv` | `Ṽ_0 ‖ … ‖ Ṽ_127` | 32 | `h_V` (`H_1`) |
 | `ch2` | `chall1 ‖ ũ ‖ h_V ‖ enc(d)` | 64 | `chall2` (`H_2^2`) |
-| `ch3` | `chall2 ‖ ã ‖ b̃` | 16 | `chall3` (`H_2^3`) |
+| `ch3` | `chall2 ‖ ã ‖ enc(b̃)` | 16 | `chall3` (`H_2^3`) |
 
 `sid` is the statement id, `pub` the canonical public inputs, `m` the message,
-`x` the witness. Seeds and IVs are 16 bytes.
+`x` the witness. Seeds and IVs are 16 bytes. A field the proof carries
+(`iv_pre`, `enc(c_i)`, `ũ`, `enc(d)`, `ã`) is hashed as its bytes in the
+proof. `enc(b̃)` is the 16-byte encoding (§1.3) of the field element `b̃`.
 
 ### 3.3 Why SHAKE256 everywhere, and no AES
 
@@ -165,7 +189,7 @@ each input encoding is injective.
 - The inputs carry the position, which gives the effect of FAEST v3's tweaked
   PRG: within a proof, no two `ggm`, `leaf` or `exp` calls with the same tag
   share the non-secret prefix `iv ‖ u8(i) ‖ u16le(n)` (a `leaf` and an `exp` call
-  on the same leaf differ only by tag), the single `root` call has its own tag,
+  on the same leaf share this prefix but not the tag), the single `root` call has its own tag,
   and `iv` separates proofs. A seed guess therefore tests one target.
 - **Cost.** The verifier expands `Σ_i (N_i − 1) = 1,000` leaves of
   `⌈ℓ̂/8⌉ = 5,307` bytes, about 5.3 MB of SHAKE256 output for statement 0x01
@@ -245,8 +269,9 @@ computing these sums (e.g. FAEST's divide-and-conquer) is conforming.
 
 ### 5.3 Corrections and the combined VOLE
 
-`Δ ∈ GF(2^128)` is `chall3` (§8) read as a field element; `Δ_j` denotes its
-bit `j`. **Challenge decoding** (FAEST's ChalDec): tree `i` uses the `k_i` bits of
+`Δ ∈ GF(2^128)` is `chall3` (§8) read as a field element (§1.3); `Δ_j` denotes
+its bit `j`, the coefficient of `X^j`, which is bit `j mod 8` of byte `⌊j/8⌋` of
+`chall3`. **Challenge decoding** (FAEST's ChalDec): tree `i` uses the `k_i` bits of
 `Δ` starting at
 
 ```
@@ -254,7 +279,8 @@ o_i = Σ_{i' < i} k_{i'} = k0·i                    if i < τ0
                         = k0·τ0 + k1·(i − τ0)     otherwise
 ```
 
-and its index is `δ_i = Σ_{b < k_i} Δ_{o_i+b}·2^b`, so `bit_b(δ_i) = Δ_{o_i+b}`. The
+and its index is `δ_i = Σ_{b < k_i} Δ_{o_i+b}·2^b`, so `bit_b(δ_i) = Δ_{o_i+b}` and
+`Δ_{o_i}` is the least significant bit of `δ_i`. The
 ranges `[o_i, o_i + k_i)` partition `[0, 128)`. The hidden leaf of tree `i` is
 `j* = δ_i`. For `τ = 24`, tree `i < 8` uses bits `[6i, 6i + 6)` and tree `i ≥ 8`
 uses bits `[48 + 5(i − 8), 53 + 5(i − 8))`.
@@ -353,8 +379,12 @@ For field elements `x_0..x_{C−1}` and a mask `z`:
 
 ```
 ZKH(x; z) = r0·Σ_{i<C} s^(C−1−i)·x_i ⊕ r1·Σ_{i<C} t^(C−1−i)·x_i ⊕ z
-            (Horner: h = 0; for each i: h = h·s ⊕ x_i)
+            (Horner: h = h' = 0; for i = 0..C−1: h = h·s ⊕ x_i, h' = h'·t ⊕ x_i;
+             then ZKH = r0·h ⊕ r1·h' ⊕ z)
 ```
+
+ZKH's Horner step multiplies before it adds, so `x_{C−1}` has exponent 0. VH's
+step (§5.4) adds before it multiplies, so every exponent is ≥ 1.
 
 This is FAEST v1.1's ZKHash with `t` a full field element instead of a 64-bit
 one: `ε_zk ≤ 2^−128 + ((C−1)/2^128)^2` [FAEST v1.1 Lemma 2 with Prop. 2–3]. For
@@ -632,7 +662,7 @@ hcom     = SHAKE256[hcom](h_0 ‖ … ‖ h_{τ−1}, 32)
 chall1   = SHAKE256[ch1](μ ‖ hcom ‖ enc(c_1) ‖ … ‖ enc(c_{τ−1}) ‖ iv_pre, 32)
 h_V      = SHAKE256[hv](Ṽ_0 ‖ … ‖ Ṽ_127, 32)
 chall2   = SHAKE256[ch2](chall1 ‖ ũ ‖ h_V ‖ enc(d), 64)
-chall3   = SHAKE256[ch3](chall2 ‖ enc(ã) ‖ enc(b̃), 16)
+chall3   = SHAKE256[ch3](chall2 ‖ ã ‖ enc(b̃), 16)
 Δ        = chall3 as a field element; δ_i decoded from Δ (§5.3)
 ```
 
@@ -880,7 +910,7 @@ outputs have at least 256 bits.
   at most `Q_H^2/2` pairs of outputs, each colliding with probability
   `2^−256`, with a factor 2 to spare for a query that hits a value fixed
   earlier in the transcript. The `chall3` term is new: the verifier compares
-  `SHAKE256[ch3](chall2 ‖ ã ‖ b̃')` with the `chall3` in the proof, not `b̃'`
+  `SHAKE256[ch3](chall2 ‖ ã ‖ enc(b̃'))` with the `chall3` in the proof, not `b̃'`
   with `b̃`, so a `ch3` query can also succeed when `b̃' ≠ b̃` and the 128-bit
   outputs coincide. That is a fixed-point event, `2^−128` per query, not a
   birthday bound, because `Δ`, and with it `b̃'`, is that same query's output.
