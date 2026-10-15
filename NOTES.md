@@ -558,7 +558,7 @@ then rerun every test.
 | `ct-prover` | Finding F7: constant-time GF(2^128) arithmetic in the Rust prover, zeroization and a dudect-style timing test (`rust/CT-AUDIT.md`). | done; three review rounds, the last SHIP |
 | `crosscheck` | An independent check of `ct-prover`: rerun, the portable path, three implementations on 800 cases, 60 minutes of fuzzing the new verifier. | done, no finding |
 | `spec-rev2` | SPEC.md v0.2 revision 2: wording only, resolves the 18 spec issues, adds per-gadget circuit digests. | done, reviewed |
-| `fuzz` | cargo-fuzz targets for `verify`, for structured mutations of the valid proofs and for the C ABI. | running |
+| `fuzz` | cargo-fuzz targets for `verify`, for structured mutations of the valid proofs and for the C ABI (`rust/fuzz/REPORT.md`). | done, no finding |
 
 ### Clean-room Go verifier
 
@@ -681,9 +681,38 @@ Reviewed here against `python/voleith`:
   and `src/circuit.rs` with `#[path]`. On `ct-prover`, gf128.rs also needs
   `clmul.rs`, so the merge has to adjust that test.
 
-### Fuzzing
+### Fuzzing (branch `fuzz`)
 
-Running since 07:16 UTC: 3 h 10 min on 4 cores. The results will go here.
+Three cargo-fuzz targets, run against `main` (`580fabe`):
+
+- `verify_raw`: arbitrary bytes split into statement, message and proof;
+- `verify_mutate`: structured edits of the valid proofs (bit flips, field
+  boundaries of §10, header, lengths, message and statement);
+- `ffi`: `voleith_verify_s1` under AddressSanitizer, with arbitrary lengths
+  and null pointers.
+
+Results:
+
+- **Campaign.** 3 h 15 min on 4 cores, in two phases on the same corpora
+  (the session's runner stopped the first at 2 h): 4.29 million
+  executions. Coverage levelled off within about 1.5 hours.
+- **Findings.** No crash, panic, timeout, memory error, or accepted
+  modified proof.
+- **Timing.** 21 inputs were flagged at more than twice a valid verify
+  while all 4 cores were busy. On an idle core, none reproduces: the
+  slowest runs at 1.17 times a valid verify. `Δ = ff…ff` costs 1.04 times
+  and a 64 KiB message 1.01 times.
+- **Harness.** An early `ffi` "accept" was the harness's mistake: a null
+  message pointer with length 0 is the empty message, which the header
+  allows. Fixed before the main run.
+- **Optional notes.**
+  - `rust/include/voleith.h` could say that a null `y` returns 0; the shim
+    already checks it.
+  - `vc.rs` relies on `debug_assert!` for the opening length, which holds
+    by construction for the fixed layout.
+
+The `crosscheck` branch ran the same harness for 60 minutes against the
+constant-time verifier, with the same result.
 
 ## Open questions for reviewers
 
