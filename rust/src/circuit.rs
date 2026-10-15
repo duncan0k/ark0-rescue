@@ -383,14 +383,14 @@ impl Circuit {
                 Op::Mul(a, b) => {
                     let kz = keys[wi];
                     wi += 1;
-                    sink(gf128::mul(vals[a as usize], vals[b as usize]) ^ mul_delta.mul(kz));
+                    sink(gf128::mul_public(vals[a as usize], vals[b as usize]) ^ mul_delta.mul(kz));
                     kz
                 }
                 Op::Assert(a, b, c, m) => {
                     let ka = key_of(vals[a as usize], m & 1 != 0);
                     let kb = key_of(vals[b as usize], m & 2 != 0);
                     let kc = key_of(vals[c as usize], m & 4 != 0);
-                    sink(gf128::mul(ka, kb) ^ mul_delta.mul(kc));
+                    sink(gf128::mul_public(ka, kb) ^ mul_delta.mul(kc));
                     continue;
                 }
             };

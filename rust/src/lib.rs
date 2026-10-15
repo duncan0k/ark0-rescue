@@ -3,9 +3,12 @@
 //! The verifier follows SPEC.md §11: every length and format check happens
 //! before any parsing of proof contents or hashing, and any failure is a
 //! rejection. The prover reproduces the Python reference byte for byte for
-//! the same randomness; it is not constant time and is meant for testing.
+//! the same randomness. Its field arithmetic on secret data is constant time
+//! and it zeroizes its secrets when they go out of scope; see
+//! `rust/CT-AUDIT.md` for what was checked and what remains.
 //!
-//! Unsafe code is forbidden in every module except [`ffi`], the C ABI shim.
+//! Unsafe code is forbidden in every module except [`ffi`], the C ABI shim,
+//! and `clmul`, the PCLMULQDQ multiplication.
 
 #![deny(unsafe_code)]
 
@@ -14,6 +17,8 @@ pub mod params;
 
 mod bits;
 mod circuit;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+mod clmul;
 mod gadgets;
 mod gf128;
 mod proof;
