@@ -44,6 +44,17 @@ fn mask_element(rows: &[u128]) -> u128 {
     z
 }
 
+/// Equality of two byte strings of the same length without an early exit:
+/// the time does not depend on where they differ.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    debug_assert_eq!(a.len(), b.len());
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    core::hint::black_box(diff) == 0
+}
+
 fn arr16(b: &[u8]) -> [u8; 16] {
     let mut a = [0u8; 16];
     a.copy_from_slice(b);
@@ -291,11 +302,7 @@ fn verify_core(
             chall3: check,
         };
     }
-    let mut diff = 0u8;
-    for (a, b) in check.iter().zip(chall3.iter()) {
-        diff |= a ^ b;
-    }
-    diff == 0
+    ct_eq(&check, &chall3)
 }
 
 // ------------------------------------------------------------------ prover
@@ -404,7 +411,7 @@ fn prove_impl(
     if witness.len() != statements::S1_WITNESS_LEN {
         return Err(ProveError::BadWitnessLength);
     }
-    if &statements::s1_hmac(parsed.key, parsed.suffix, witness) != parsed.y {
+    if !ct_eq(&statements::s1_hmac(parsed.key, parsed.suffix, witness), parsed.y) {
         return Err(ProveError::RelationFails);
     }
     let circ = statements::circuit(statement_id).ok_or(ProveError::UnknownStatement)?;

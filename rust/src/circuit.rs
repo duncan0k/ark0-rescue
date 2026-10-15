@@ -254,7 +254,8 @@ impl Circuit {
     }
 
     /// Evaluate in the clear. Returns every wire value, the witness bits and
-    /// whether every ASSERT holds.
+    /// whether every ASSERT holds. The work and the memory accesses depend
+    /// only on the instruction list, never on the wire values.
     pub fn evaluate(&self, public_bits: &[u8], secret_bits: &[u8]) -> (Vec<u8>, Vec<u8>, bool) {
         assert_eq!(public_bits.len(), self.n_public, "public input length");
         assert_eq!(secret_bits.len(), self.n_secret, "secret input length");
@@ -264,7 +265,8 @@ impl Circuit {
         vals.extend_from_slice(secret_bits);
         let mut witness: Vec<u8> = Vec::with_capacity(self.n_witness);
         witness.extend_from_slice(secret_bits);
-        let mut ok = true;
+        // OR of (a & b) ^ c over every ASSERT: no branch on wire values.
+        let mut bad = 0u8;
         for ins in &self.instrs {
             match *ins {
                 Instr::Xor(a, b) => {
@@ -285,13 +287,11 @@ impl Circuit {
                     vals.push(v);
                 }
                 Instr::Assert(a, b, c) => {
-                    if vals[a as usize] & vals[b as usize] != vals[c as usize] {
-                        ok = false;
-                    }
+                    bad |= (vals[a as usize] & vals[b as usize]) ^ vals[c as usize];
                 }
             }
         }
-        (vals, witness, ok)
+        (vals, witness, bad == 0)
     }
 
     /// Prover terms (SPEC.md §6.2) for every constraint in order:
