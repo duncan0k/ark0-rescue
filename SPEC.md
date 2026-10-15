@@ -65,6 +65,8 @@ references are listed in §17.
 16. Versioning
 17. References
 
+Appendix A. Vector files
+
 ## 1. Conventions
 
 ### 1.1 Notation
@@ -579,7 +581,8 @@ with `1 ≤ |K| ≤ 64`, every byte of `K` in `0x20..0x7E` (printable ASCII), `y
 **Relation.** `HMAC-SHA256(K, x ‖ suffix) = y` (RFC 2104 with a key of at most
 one block). Keys longer than 64 bytes are not supported.
 
-**Public bits** (`P = 776`), computed natively by prover and verifier:
+**Public bits** (`P = 776`), computed natively by prover and verifier (by the
+verifier only after step 6 of §11):
 
 | bits | value |
 |---|---|
@@ -737,8 +740,8 @@ chall3   = SHAKE256[ch3](chall2 ‖ ã ‖ enc(b̃), 16)
 
 ## 9. Prover
 
-`prove(statement, x, m, rng)`, where `rng(n)` returns `n` bytes and is called
-exactly once with `n = 32`:
+`prove(statement, x, m, rng)`, with `statement` as in §11, where `rng(n)`
+returns `n` bytes and is called exactly once with `n = 32`:
 
 1. Reject an unknown statement id, non-canonical public inputs, `m` not bytes
    or longer than 65,535 bytes, or `|x| ≠ 32`.
@@ -791,15 +794,25 @@ encoding of the same proof.
 
 ## 11. Verifier
 
-`verify(statement, m, π) → bool`. Return false at the first failed check.
-**Steps 1–5 happen before any hashing or parsing of proof contents.**
+`verify(statement, m, π) → bool`, where:
 
-1. The statement id is a registered id (only `0x01` in v0.2); otherwise false.
-2. The public inputs parse canonically (§7.5): first byte `L ∈ [1, 64]`, total
-   length exactly `L + 34`, `K` bytes in `0x20..0x7E`.
+- `statement = (sid, pub)`: `sid` is the statement id, an integer, and `pub`
+  is the byte string of public inputs in the encoding of §7.5, as received;
+- `m` is the message and `π` the proof, both byte strings.
+
+The verifier never takes parsed public inputs such as `(K, suffix, y)`: step 2
+checks `pub`, and `μ` (§8) hashes `pub` as received. An `sid` outside
+`[0, 255]` is not registered and fails step 1, so `u8(sid)` in `μ` is always
+defined. An argument of the wrong type fails the step that checks it.
+
+Return false at the first failed check:
+
+1. `sid` is a registered id (only `0x01` in v0.2).
+2. `pub` parses canonically (§7.5): first byte `L ∈ [1, 64]`, total length
+   exactly `L + 34`, `K` bytes in `0x20..0x7E`.
 3. `m` is a byte string of length ≤ 65,535.
 4. `π` is a byte string of length exactly `|π|` for this statement id (130,218).
-5. `π[0] = 0x02` and `π[1] =` the statement id.
+5. `π[0] = 0x02` and `π[1] = sid`.
 6. Split `π` at the fixed offsets of §10. Decode each `enc(c_i)` and `enc(d)`;
    reject if any padding bit is non-zero. Steps 8–9 hash these bytes as
    received.
@@ -808,22 +821,28 @@ encoding of the same proof.
    seeds `sd_{i,j}`, `j ≠ j*`; expand them (§5.1); compute `q_{i,b}` (§5.2); form
    `Q` with the corrections (§5.3). Compute `hcom` and `chall1`.
 9. `h_V` from `VH(Q_j) ⊕ Δ_j·ũ` (§5.4); `chall2`.
-10. Correct `Q` with `d` (§6.1); compute rows `q[r]` for `r < ℓ + 128`; evaluate
-    the circuit's keys (§7.3) to get `B_t`; `q*`; `q̃ = ZKH(B; q*)`;
-    `b̃ = q̃ ⊕ ã·Δ`.
+10. Correct `Q` with `d` (§6.1); compute rows `q[r]` for `r < ℓ + 128`; compute
+    the public bits (§7.5); evaluate the circuit's keys (§7.3) to get `B_t`;
+    `q*`; `q̃ = ZKH(B; q*)`; `b̃ = q̃ ⊕ ã·Δ`.
 11. Recompute `chall3' = SHAKE256[ch3](chall2 ‖ ã ‖ enc(b̃), 16)` and return
     `chall3' == chall3`.
 
-`vectors/statement1-v0.2.json` holds 4 valid vectors and 52 negative vectors
-(edits of a valid proof, statement or message: every header byte, every padding
-bit, each proof section, length ±1, wrong `m`, `y`, `K`, `suffix` and statement
-id) that every conforming verifier must reject.
+**Steps 1–6 depend only on `sid`, `pub`, the length of `m`, the length of
+`π`, `π[0..2)` and the padding bits of each `enc(c_i)` and `enc(d)`.** No hash,
+PRG, field or circuit work happens before all of steps 1–6 have passed. That
+includes the native SHA-256 compressions of `K` and the subtraction that form
+the public bits (§7.5). Step 10 lists them; an implementation may compute them
+at any point after step 6.
+The order of steps 1–6 does not change the verdict.
+
+Every conforming verifier gives the expected verdict on every case of the two
+proof vector files (Appendix A).
 
 Properties:
 
-- Steps 1–6 need only the fixed sizes of the statement id, not its circuit.
-  An implementation that builds a statement's circuit lazily must do so after
-  step 6, or the first malformed input in a process pays for the build.
+- Steps 1–6 need only the fixed sizes of the statement id (§10), not its
+  circuit. So a circuit that is built lazily is built after step 6, and a
+  malformed input never pays for the build.
 - The work after step 6 is bounded but not constant. Fixed work dominates it
   (about 5.3 MB of SHAKE256 output and the circuit's keys), and it varies
   with the bits of `Δ = chall3`: each set bit `Δ_j` adds a conditional XOR of
@@ -871,7 +890,9 @@ A valid proof shows only that its maker knew some `x` with
 is a property of the proof system; if the rescue-lane rules miss one, coins
 can be stolen however sound the proof is. They are hard requirements on the
 M4-R design (from the 2026-10-14 internal reviews; not yet checked against
-that design):
+that design). The node or the rescue adapter performs these checks, never
+`verify`: `verify` performs exactly the checks of §11, so it accepts any
+32-byte `y` and any `m` of up to 65,535 bytes.
 
 1. **`y` is fixed by the spent output.** The node takes `y` from the rescue
    token and checks natively that `0 < y < n` (the secp256k1 group order) and
@@ -1253,3 +1274,52 @@ either change would need a new version:
 - [FIPS 180-4] SHA-256. [FIPS 202] SHAKE256. [RFC 2104] HMAC.
 - Internal: `R1-voleith-plan.md`, `R-rescue-proof-system.md`,
   `m4-design-2026-10-14.md` §11, `m4-plan-2026-10-14.md` §9.
+
+## Appendix A. Vector files
+
+Three files in `vectors/` pin the behaviour. Byte strings are hex unless
+noted. The `spec` field names the version; a revision that changes wording
+only keeps a file unchanged (§16).
+
+**`statement1-v0.2.json`: known answers.**
+
+- The header gives the parameters, `proof_len` and the statement 0x01
+  circuit: its digest (§7.6) and gate counts (§7.5).
+- `vectors`: 4 valid proofs. Each gives the statement (`statement_id`,
+  `public_inputs`, and `K_ascii`, `suffix`, `y` for reading), `witness_x`,
+  `message`, `rho` (the one `rng(32)` output, §9), `proof` and
+  `intermediates` (`mu` … `chall3`, for localising a mismatch).
+- `negative_vectors`: 52 cases. Each applies one edit, `proof_edit`, to the
+  proof of `vectors[base_vector]`, and verifies the result against its own
+  `statement_id`, `public_inputs` and `message`. The expected verdict is
+  false. The cases cover every header byte, every padding bit, each proof
+  section, length ±1, the empty proof, malformed public inputs, and a wrong
+  `m`, `y`, `K`, `suffix` or statement id.
+
+**`statement1-v0.2-differential.json`: verdicts.** `format` is
+`voleith-differential-1`.
+
+- `valid`: 100 proofs with `expected` true. They have the fields of a known
+  answer except `proof_len` and `intermediates`, and carry the proof as base64 in
+  `proof_b64`.
+- `mutated`: 440 cases with `expected` false. Each applies the list
+  `proof_edits`, in order, to the decoded proof of `valid[base]`, and
+  verifies the result against its own `statement_id` (0, 1, 2 or 255),
+  `public_inputs` and `message`. A `message` of null means `message_zeros`
+  zero bytes. `kind` groups the cases; `counts` gives the number per kind.
+- `master_seed` and `stream_note` say how the generator derived each case;
+  a verifier does not need them.
+
+**Edit language.** An edit is a JSON object; offsets and lengths count bytes
+of the proof:
+
+| `op` | fields | effect |
+|---|---|---|
+| `none` | | no change; the case changes the statement or the message (known-answer file only) |
+| `xor` | `offset`, `mask` | XOR the byte at `offset` with the one-byte `mask` |
+| `set` | `offset`, `data` | overwrite `\|data\|` bytes from `offset`, inside the proof |
+| `truncate` | `length` | keep the first `length` bytes |
+| `append` | `data` | append `data` |
+| `prepend` | `data` | insert `data` before byte 0 |
+
+**`gadgets-v0.2.json`: per-gadget circuits.** §7.6 describes it.
