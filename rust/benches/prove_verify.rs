@@ -3,6 +3,10 @@
 //! constant-time prover).
 //!
 //! Run: `cargo bench --bench prove_verify -- [--runs 31]`
+//!
+//! The target has `harness = false`, so `cargo test --all-targets` runs it
+//! too, without the `--bench` flag that `cargo bench` passes. Then it only
+//! proves and verifies once, checks the result and exits.
 
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -28,6 +32,7 @@ fn summary(label: &str, mut v: Vec<Duration>) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let bench = args.iter().any(|a| a == "--bench");
     let runs: usize = arg_value(&args, "--runs")
         .map(|r| r.parse().expect("runs"))
         .unwrap_or(31);
@@ -50,6 +55,16 @@ fn main() {
         .map(|b| format!("{b:02x}"))
         .collect();
     println!("proof {} bytes, sha256 {digest}", proof.len());
+    assert_eq!(Some(proof.len()), voleith::proof_length(1));
+    if !bench {
+        // Smoke test under `cargo test`: one prove and one verify, checked
+        // above, plus a rejected tampered proof. No measurement.
+        let mut bad = proof.clone();
+        bad[proof.len() / 2] ^= 1;
+        assert!(!voleith::verify(1, &pub_inputs, &msg, &bad));
+        println!("not run with --bench: smoke test only, no measurement");
+        return;
+    }
 
     let mut tp = Vec::with_capacity(runs);
     let mut tv = Vec::with_capacity(runs);
