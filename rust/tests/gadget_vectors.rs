@@ -9,6 +9,13 @@
 
 mod common;
 
+// gf128.rs calls `crate::clmul` on x86; include it under the same cfg as
+// lib.rs does.
+#[allow(dead_code)]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[path = "../src/clmul.rs"]
+mod clmul;
+
 #[allow(dead_code)]
 #[path = "../src/gf128.rs"]
 mod gf128;
