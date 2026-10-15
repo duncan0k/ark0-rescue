@@ -2,6 +2,12 @@
 //! splits, interleaved with a libsecp256k1 BIP-340 Schnorr baseline in the
 //! same binary, and the validation-weight rule of the v0.2 decision.
 //!
+//! Besides the valid proof with a 96-byte message, each split is timed on
+//! three other inputs: that proof with chall3 = ff..ff (it passes the format
+//! checks, so it costs a full verification, and a Delta with every bit set
+//! maximises the conditional XORs), a valid proof over a 65,535-byte
+//! message, and that proof with chall3 = ff..ff.
+//!
 //! Run: `cargo bench --features bench-splits --bench verify --
 //! [--taus 22,24] [--runs 1000] [--schnorr 20000]`
 
@@ -10,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use secp256k1::{Keypair, Secp256k1};
 use sha3::digest::{ExtendableOutput, Update, XofReader};
-use voleith::params::TreeSplit;
+use voleith::params::{TreeSplit, MAX_MESSAGE_LEN};
 
 fn utc_now() -> String {
     let s = SystemTime::now()
@@ -87,6 +93,23 @@ fn arg_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
         .map(|s| s.as_str())
 }
 
+/// One timed input: a proof under a split, with its message.
+struct Case<'a> {
+    label: &'static str,
+    split: TreeSplit,
+    message: &'a [u8],
+    proof: Vec<u8>,
+    valid: bool,
+}
+
+/// The proof with its last 16 bytes, chall3, set to ff..ff.
+fn chall3_all_ones(proof: &[u8]) -> Vec<u8> {
+    let mut p = proof.to_vec();
+    let n = p.len();
+    p[n - 16..].fill(0xff);
+    p
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let taus: Vec<usize> = arg_value(&args, "--taus")
@@ -133,14 +156,16 @@ fn main() {
     ] {
         msg.extend_from_slice(&voleith::hash::sha256(part));
     }
+    let long_msg: Vec<u8> = (0..MAX_MESSAGE_LEN).map(|i| (i % 251) as u8).collect();
     let rho = [7u8; 32];
     let t = Instant::now();
-    let _ = voleith::bench::proof_length(splits[0], 1);
+    let _ = voleith::circuit_info::statement_circuit_info(1);
     println!(
-        "circuit build (once per process): {:.3} ms",
+        "circuit build and digest (once per process): {:.3} ms",
         ms(t.elapsed())
     );
     let mut proofs = Vec::new();
+    let mut cases = Vec::new();
     for &s in &splits {
         let t = Instant::now();
         let p = voleith::bench::prove(s, 1, &pub_inputs, &x, &msg, &rho).unwrap();
@@ -162,6 +187,36 @@ fn main() {
         for _ in 0..5 {
             assert!(voleith::bench::verify(s, 1, &pub_inputs, &msg, &p));
         }
+        let long = voleith::bench::prove(s, 1, &pub_inputs, &x, &long_msg, &rho).unwrap();
+        assert!(voleith::bench::verify(s, 1, &pub_inputs, &long_msg, &long));
+        cases.push(Case {
+            label: "valid",
+            split: s,
+            message: &msg,
+            proof: p.clone(),
+            valid: true,
+        });
+        cases.push(Case {
+            label: "chall3 ff..ff",
+            split: s,
+            message: &msg,
+            proof: chall3_all_ones(&p),
+            valid: false,
+        });
+        cases.push(Case {
+            label: "max message",
+            split: s,
+            message: &long_msg,
+            proof: long.clone(),
+            valid: true,
+        });
+        cases.push(Case {
+            label: "max message, chall3 ff..ff",
+            split: s,
+            message: &long_msg,
+            proof: chall3_all_ones(&long),
+            valid: false,
+        });
         proofs.push(p);
     }
 
@@ -185,8 +240,8 @@ fn main() {
         4080.0 * 5307.0 / s.median.as_secs_f64() / 1e6
     );
 
-    // Valid proofs, interleaved across splits, in four segments with a
-    // quarter of the Schnorr runs after each.
+    // Every case, interleaved, in four segments with a quarter of the
+    // Schnorr runs after each.
     let secp = Secp256k1::new();
     let kp = Keypair::from_seckey_byte_array(&secp, [0x42u8; 32]).unwrap();
     let (xonly, _) = kp.x_only_public_key();
@@ -195,22 +250,23 @@ fn main() {
     for _ in 0..1000 {
         assert!(secp.verify_schnorr(&sig, &smsg, &xonly).is_ok());
     }
-    let mut times: Vec<Vec<Duration>> = vec![Vec::with_capacity(runs); splits.len()];
+    let mut times: Vec<Vec<Duration>> = vec![Vec::with_capacity(runs); cases.len()];
     let mut sch = Vec::with_capacity(schnorr_runs);
     for seg in 0..4 {
         for r in seg * runs / 4..(seg + 1) * runs / 4 {
-            for k in 0..splits.len() {
-                let i = (r + k) % splits.len();
+            for k in 0..cases.len() {
+                let i = (r + k) % cases.len();
+                let c = &cases[i];
                 let t = Instant::now();
                 let ok = voleith::bench::verify(
-                    splits[i],
+                    c.split,
                     black_box(1),
                     black_box(&pub_inputs),
-                    black_box(&msg),
-                    black_box(&proofs[i]),
+                    black_box(c.message),
+                    black_box(&c.proof),
                 );
                 times[i].push(t.elapsed());
-                assert!(ok);
+                assert_eq!(ok, c.valid, "{}", c.label);
             }
         }
         for _ in seg * schnorr_runs / 4..(seg + 1) * schnorr_runs / 4 {
@@ -265,38 +321,72 @@ fn main() {
 
     // The rule: C = 1.25 * 50 * p99 / median(Schnorr) <= budget / 1.5,
     // budget = proof bytes + 50.
+    let weight = |p99: Duration| 1.25 * 50.0 * p99.as_secs_f64() / sch.median.as_secs_f64();
     println!("tau | shape | proof bytes | verify median | verify p99 | Schnorr median | C | budget | margin | C <= budget/1.5");
-    for (i, s) in splits.iter().enumerate() {
+    for (i, c) in cases.iter().enumerate().filter(|(_, c)| c.label == "valid") {
+        let s = c.split;
         let st = stats(times[i].clone());
-        let c = 1.25 * 50.0 * st.p99.as_secs_f64() / sch.median.as_secs_f64();
-        let budget = (proofs[i].len() + 50) as f64;
+        let c_w = weight(st.p99);
+        let budget = (c.proof.len() + 50) as f64;
         println!(
             "{} | {:?} | {} | {:.3} ms | {:.3} ms | {:.3} us | {:.0} | {:.0} | {:.2} | {}",
             s.tau(),
             s.shape(),
-            proofs[i].len(),
+            c.proof.len(),
             ms(st.median),
             ms(st.p99),
             us(sch.median),
-            c,
+            c_w,
             budget,
-            budget / c,
-            c <= budget / 1.5
+            budget / c_w,
+            c_w <= budget / 1.5
         );
         println!(
             "SUMMARY {{\"tau\":{},\"n\":{},\"proof_bytes\":{},\"verify_median_ms\":{:.3},\"verify_p99_ms\":{:.3},\"verify_min_ms\":{:.3},\"verify_max_ms\":{:.3},\"schnorr_median_us\":{:.3},\"C\":{:.0},\"budget\":{:.0},\"margin\":{:.3},\"qualifies\":{}}}",
             s.tau(),
             st.n,
-            proofs[i].len(),
+            c.proof.len(),
             ms(st.median),
             ms(st.p99),
             ms(st.min),
             ms(st.max),
             us(sch.median),
-            c,
+            c_w,
             budget,
-            budget / c,
-            c <= budget / 1.5
+            budget / c_w,
+            c_w <= budget / 1.5
+        );
+    }
+
+    // Every case, with C from its own p99 against the same budget.
+    println!("tau | case | message bytes | n | median | p99 | max | C | budget / C");
+    for (i, c) in cases.iter().enumerate() {
+        let st = stats(times[i].clone());
+        let c_w = weight(st.p99);
+        let budget = (c.proof.len() + 50) as f64;
+        println!(
+            "{} | {} | {} | {} | {:.3} ms | {:.3} ms | {:.3} ms | {:.0} | {:.2}",
+            c.split.tau(),
+            c.label,
+            c.message.len(),
+            st.n,
+            ms(st.median),
+            ms(st.p99),
+            ms(st.max),
+            c_w,
+            budget / c_w
+        );
+        println!(
+            "CASE {{\"tau\":{},\"case\":\"{}\",\"message_bytes\":{},\"n\":{},\"median_ms\":{:.3},\"p99_ms\":{:.3},\"max_ms\":{:.3},\"C\":{:.0},\"margin\":{:.3}}}",
+            c.split.tau(),
+            c.label,
+            c.message.len(),
+            st.n,
+            ms(st.median),
+            ms(st.p99),
+            ms(st.max),
+            c_w,
+            budget / c_w
         );
     }
     println!("end {}", utc_now());
