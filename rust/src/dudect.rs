@@ -102,11 +102,13 @@ fn welch_t(a: &Moments, b: &Moments) -> f64 {
     }
 }
 
-/// The result of one test: the largest |t| over the raw timings and the
-/// crops, which crop gave it, and the class medians.
+/// The result of one test: the largest |t| over the decidable crops (the
+/// raw timings count as a crop), which crop gave it, the first undecidable
+/// crop if any, and the class medians.
 struct Report {
     max_t: f64,
     worst: String,
+    undecidable: Option<String>,
     median_fixed: f64,
     median_random: f64,
     n: usize,
@@ -116,8 +118,9 @@ struct Report {
 /// few upper percentiles of the pooled distribution (dudect's cropping,
 /// which removes interrupts and other long-tail noise).
 ///
-/// An undecidable crop (NaN, see [`welch_t`]) makes `max_t` NaN, so the
-/// report fails every threshold check.
+/// An undecidable crop (NaN, see [`welch_t`]) does not touch `max_t`, so a
+/// leak found by another crop stays visible; it is recorded in
+/// `undecidable` and makes the report fail [`Report::passes`].
 fn analyse(samples: &[(bool, f64)]) -> Report {
     let mut pooled: Vec<f64> = samples.iter().map(|s| s.1).collect();
     pooled.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -128,6 +131,7 @@ fn analyse(samples: &[(bool, f64)]) -> Report {
     }
     let mut max_t = 0.0f64;
     let mut worst = String::new();
+    let mut undecidable = None;
     for (name, cut) in &crops {
         let (mut f, mut r) = (Moments::default(), Moments::default());
         for &(fixed, x) in samples {
@@ -141,9 +145,8 @@ fn analyse(samples: &[(bool, f64)]) -> Report {
         }
         let t = welch_t(&f, &r);
         if t.is_nan() {
-            max_t = f64::NAN;
-            worst = format!("{name}, undecidable");
-            break;
+            undecidable.get_or_insert_with(|| name.clone());
+            continue;
         }
         if t.abs() > max_t.abs() {
             max_t = t;
@@ -162,6 +165,7 @@ fn analyse(samples: &[(bool, f64)]) -> Report {
     Report {
         max_t,
         worst,
+        undecidable,
         median_fixed: median(true),
         median_random: median(false),
         n: samples.len(),
@@ -169,19 +173,30 @@ fn analyse(samples: &[(bool, f64)]) -> Report {
 }
 
 impl Report {
-    /// Whether the test passes: |t| below the threshold. False for an
-    /// undecidable (NaN) or infinite t.
+    /// Whether a constant-time target passes: every crop decidable and
+    /// every |t| below the threshold (an infinite t fails).
     fn passes(&self) -> bool {
-        self.max_t.abs() < T_THRESHOLD
+        self.undecidable.is_none() && self.max_t.abs() < T_THRESHOLD
+    }
+
+    /// Whether a leak was detected: some decidable crop gave |t| above the
+    /// threshold, infinities included. Undecidable crops neither add nor
+    /// hide evidence.
+    fn detects_leak(&self) -> bool {
+        self.max_t.abs() > T_THRESHOLD
     }
 }
 
 fn print(label: &str, r: &Report) {
     println!(
-        "dudect {label}: n {}, max |t| {:.2} ({}), median fixed {:.1} ns, random {:.1} ns",
+        "dudect {label}: n {}, max |t| {:.2} ({}){}, median fixed {:.1} ns, random {:.1} ns",
         r.n,
         r.max_t.abs(),
         r.worst,
+        match &r.undecidable {
+            Some(c) => format!(", undecidable crop {c}"),
+            None => String::new(),
+        },
         r.median_fixed,
         r.median_random
     );
@@ -275,7 +290,7 @@ fn dudect_gf128_mul() {
     );
     print("control (leaky by construction)", &control);
     assert!(
-        control.max_t.abs() > T_THRESHOLD,
+        control.detects_leak(),
         "the harness failed to detect a known leak"
     );
 
@@ -387,6 +402,29 @@ fn welch_t_too_few_samples_fails() {
     assert!(welch_t(&Moments::default(), &b).is_nan());
     let samples = [(true, 100.0), (false, 100.0), (false, 101.0)];
     let r = analyse(&samples);
-    assert!(r.max_t.is_nan());
+    assert!(r.undecidable.is_some());
     assert!(!r.passes());
+}
+
+/// An undecidable crop must not hide a leak that another crop found
+/// (review finding R1): the leak is still detected and the report still
+/// fails as a constant-time target. Unequal class sizes on purpose.
+#[test]
+fn undecidable_crop_keeps_detected_leak() {
+    // 101 fixed samples of 100 ns, 99 random of 200 ns: raw t = -inf, the
+    // p50 crop keeps only the fixed class.
+    let mut a: Vec<(bool, f64)> = vec![(true, 100.0); 101];
+    a.extend(vec![(false, 200.0); 99]);
+    // 100 fixed of 100 ns, 100 random at 200..299 ns: the p50 crop keeps a
+    // single random sample.
+    let mut b: Vec<(bool, f64)> = vec![(true, 100.0); 100];
+    b.extend((0..100).map(|i| (false, 200.0 + i as f64)));
+    for (samples, raw_infinite) in [(a, true), (b, false)] {
+        let r = analyse(&samples);
+        assert!(r.undecidable.is_some(), "a crop must be undecidable");
+        assert!(r.detects_leak(), "max |t| {}", r.max_t);
+        assert!(r.max_t < 0.0);
+        assert_eq!(r.max_t.is_infinite(), raw_infinite);
+        assert!(!r.passes());
+    }
 }

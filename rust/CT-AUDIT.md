@@ -176,7 +176,12 @@ How they work:
   gives NaN (undecidable); both fail the test. Before 2026-10-15 (review
   finding F2) both cases returned t = 0 and passed: 100 samples of 100 ns
   against 100 of 200 ns gave t = 0 raw and for every crop. A unit test now
-  covers that sample.
+  covers that sample. An undecidable crop does not overwrite the |t| of the
+  other crops (review finding R1): a constant-time target fails if any crop
+  is undecidable or any decidable |t| reaches 4.5, and a leak counts as
+  detected (the positive control) if any decidable crop gives |t| > 4.5,
+  infinities included. A regression test covers two leaky samples whose p50
+  crop is undecidable.
 - **GF measurements.** Each sample times 64 products.
 - **prove() measurements.** Each sample is one call on the real statement
   (it cannot be made smaller): x and ρ fixed, or both random with matching
@@ -201,6 +206,12 @@ PCLMULQDQ: control 820.10 (must fail; 115 / 395 ns), `gf128::mul` **1.06**
 (385 / 385 ns), `gf128::mul_portable` **1.03** (16,419 / 16,419 ns), old
 `FixedMul` tables 383.03 (706 / 787 ns). Max |t| of the two constant-time
 multiplications: 1.06.
+
+Rerun after the R1 fix, same command and machine: control 889.36 (its p50
+crop was undecidable, the very case R1 describes; before the fix that would
+have failed the control), `gf128::mul` **2.77** (382 / 381 ns),
+`gf128::mul_portable` **1.25** (16,444 / 16,445 ns), old `FixedMul` tables
+323.52 (689 / 756 ns). No undecidable crop for the constant-time targets.
 
 | Target | n | max \|t\| | median fixed / random |
 |---|---|---|---|
@@ -286,13 +297,14 @@ was not resolved more precisely. The prover is about 4× slower there (§1).
 - `cargo clippy --all-targets` and `--all-targets --all-features` are clean.
   `cargo fmt --check` passes.
 - After the review fixes F1–F4 (2026-10-15): `cargo test --release` and
-  `cargo test` both pass 33 tests (23 unit, including the two new Welch's t
-  tests, 1 cold-reject, 2 differential, 7 vectors), plus 2 ignored timing
+  `cargo test` both pass 34 tests (24 unit, including the two new Welch's t
+  tests and the R1 regression test, 1 cold-reject, 2 differential, 7
+  vectors), plus 2 ignored timing
   tests. The KAT vectors and the 100 differential cases are reproduced
   byte for byte. `cargo clippy --all-targets --all-features -- -D warnings`
   is clean and `cargo fmt --check` passes. Under `cargo test --all-targets`
   the `prove_verify` bench only proves and verifies once (F4). The GF dudect
-  test rerun after F2 gives max |t| 1.06 (§4).
+  test rerun after F2 gives max |t| 1.06, after R1 2.77 (§4).
 - `cargo check --lib` passes for `aarch64-unknown-linux-gnu` and
   `i686-unknown-linux-gnu` (the portable path). They were not run: there is
   no cross toolchain here.
