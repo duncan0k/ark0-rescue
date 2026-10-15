@@ -1,0 +1,17 @@
+[package]
+name = "voleith-crosscheck"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Proves random statement 0x01 cases with the Rust prover and verifies them (and mutations) with the Rust verifier"
+
+[dependencies]
+voleith = { path = "../rust" }
+
+# Its own workspace: the fuzz/ package below has its own as well.
+[workspace]
+members = ["."]
+exclude = ["fuzz"]
+
+[profile.release]
+opt-level = 3
