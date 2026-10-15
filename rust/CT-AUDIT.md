@@ -223,9 +223,11 @@ have failed the control), `gf128::mul` **2.77** (382 / 381 ns),
 
 How to read these results:
 - **The GF tests have power.** The leaky control and the old tables are
-  flagged at |t| > 1,000. The tables show a 10% timing difference between a
-  fixed and a random operand, which confirms F7 was a real, measurable leak.
-  Both constant-time multiplications stay below 2.4.
+  flagged in every run (control |t| 820–1,923, tables 323–1,303). The tables
+  show a 10% timing difference between a fixed and a random operand, which
+  confirms F7 was a real, measurable leak. Both constant-time
+  multiplications stay at |t| ≤ 2.77 in every run of the final harness, well
+  below 4.5.
 - **The prove() test has almost no power.** The old prover, which certainly
   leaks through its tables, passes it as clearly as the new one. A ~30 ms
   call drowns a cache effect of a few nanoseconds per product in noise.
@@ -238,7 +240,7 @@ How to read these results:
   of 3.00, 2.02, 5.39, 13.86, 3.29 and 7.93 for `mul`, and 1.92, 6.20, 4.29,
   6.91, 6.43 and 5.27 for `mul_portable`. The
   generated code has no data-dependent instruction, and the values dropped
-  below 2.4 once both classes ran identical code between timer reads. So
+  to 2.77 or less once both classes ran identical code between timer reads. So
   they are attributed to that artefact. They are recorded here because a
   timing test that only reports its passing runs is worth little.
 - **What a pass means.** It means this machine, this build and this many
