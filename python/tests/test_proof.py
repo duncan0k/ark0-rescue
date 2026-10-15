@@ -265,6 +265,27 @@ class TestProofEndToEnd(unittest.TestCase):
             delta_4 = SPLIT.challenge_index(delta, 4)
             self.assertIs(voleith.verify(self.stmt, self.msg, proof), delta_4 == 0, seed)
 
+    def test_tampered_constraint_terms(self):
+        """A prover that changes a single QuickSilver term A0_t or A1_t
+        (SPEC §6.2) is caught by the final check: here the first constraint
+        (a MUL), one in the middle and the last one (an ASSERT)."""
+        n_constraints = st.REGISTRY[1].circuit().n_constraints
+
+        def run(tamper, seed):
+            proof, _ = P._prove_impl(self.stmt, self.x, self.msg, seeded_rng(seed),
+                                     enforce_relation=False, tamper_terms=tamper)
+            self.assertEqual(len(proof), PROOF_LEN)
+            return proof
+
+        # Control: the hook itself changes nothing.
+        self.assertTrue(voleith.verify(self.stmt, self.msg, run(lambda a0, a1: (a0, a1), b"q0")))
+        for t in (0, n_constraints // 2, n_constraints - 1):
+            for which in (0, 1):
+                def tamper(a0, a1, t=t, which=which):
+                    (a0, a1)[which][t] ^= 1
+                    return a0, a1
+                self.assertRejects(self.stmt, self.msg, run(tamper, b"q1"), (t, which))
+
     def test_cheating_prover_with_wrong_seed(self):
         proof, _ = P._prove_impl(self.stmt, flip(self.x, 0), self.msg, seeded_rng(b"c1"),
                                  enforce_relation=False)

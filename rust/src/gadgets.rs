@@ -306,7 +306,9 @@ pub fn build_statement1_circuit() -> crate::circuit::Circuit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gf128::{self, FixedMul};
     use crate::sha256;
+    use crate::unihash::{ZkAcc, ZkHash};
 
     fn bits_of_words(words: &[u32]) -> Vec<u8> {
         words
@@ -344,6 +346,91 @@ mod tests {
             assert!(ok);
             let out: Vec<u8> = circ.outputs.iter().map(|&w| vals[w as usize]).collect();
             assert_eq!(out, bits_of_words(&sha256::compress(&state, &block)));
+        }
+    }
+
+    /// The check of SPEC.md §6.3 (b~ = q~ + a~ Delta, with a~ = ZKH(A1; u*),
+    /// b~ = ZKH(A0; v*), q~ = ZKH(B; q*)) fails when the prover changes any
+    /// single term A0_t or A1_t of an honest witness, for every t. The
+    /// circuit is the small one of python/tests/test_quicksilver.py with
+    /// 32-bit words: s = x + y, Maj(x, y, p), Ch(p, x, y), s + p = z asserted
+    /// for a public z, and s + p computed.
+    #[test]
+    fn quicksilver_check_rejects_any_single_tampered_term() {
+        let mut state = 0x5eed_u64;
+        let mut rand = move || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            let lo = z ^ (z >> 31);
+            ((lo as u128) << 64) | lo.rotate_left(17) as u128
+        };
+        let mut b = Builder::new(64, 64);
+        let p: Word = core::array::from_fn(|i| b.public(i));
+        let z: Word = core::array::from_fn(|i| b.public(32 + i));
+        let x: Word = core::array::from_fn(|i| b.secret(i));
+        let y: Word = core::array::from_fn(|i| b.secret(32 + i));
+        let s = add(&mut b, &x, &y);
+        maj(&mut b, &x, &y, &p);
+        ch(&mut b, &p, &x, &y);
+        assert_add(&mut b, &s, &p, &z);
+        add_multi(&mut b, &[s, p]);
+        let circ = b.build();
+        assert!(circ.n_mul > 0 && circ.n_assert == 32);
+
+        let (xv, yv, pv) = (rand() as u32, rand() as u32, rand() as u32);
+        let zv = xv.wrapping_add(yv).wrapping_add(pv);
+        let pub_bits = bits_of_words(&[pv, zv]);
+        let (_, wit, ok) = circ.evaluate(&pub_bits, &bits_of_words(&[xv, yv]));
+        assert!(ok);
+        let delta = rand();
+        let tags: Vec<u128> = wit.iter().map(|_| rand()).collect();
+        let keys: Vec<u128> = tags
+            .iter()
+            .zip(&wit)
+            .map(|(&t, &w)| t ^ (delta & 0u128.wrapping_sub(w as u128)))
+            .collect();
+        let (mut a0, mut a1, mut bt) = (Vec::new(), Vec::new(), Vec::new());
+        circ.prover_terms(&pub_bits, &wit, &tags, |t0, t1| {
+            a0.push(t0);
+            a1.push(t1);
+        });
+        circ.verifier_terms(&pub_bits, &keys, delta, &FixedMul::new(delta), |t| {
+            bt.push(t)
+        });
+        assert_eq!(a0.len(), circ.n_constraints);
+        assert_eq!(bt.len(), circ.n_constraints);
+        for (t, ((&b_t, &a0_t), &a1_t)) in bt.iter().zip(&a0).zip(&a1).enumerate() {
+            assert_eq!(b_t, a0_t ^ gf128::mul(a1_t, delta), "honest term {t}");
+        }
+
+        let mut chall2 = [0u8; 64];
+        for chunk in chall2.chunks_exact_mut(16) {
+            chunk.copy_from_slice(&rand().to_le_bytes());
+        }
+        let zk = ZkHash::new(&chall2);
+        let zkh = |terms: &[u128], mask: u128| {
+            let mut acc = ZkAcc::default();
+            for &v in terms {
+                zk.absorb(&mut acc, v);
+            }
+            zk.finish(&acc, mask)
+        };
+        let (u_star, v_star) = (rand(), rand());
+        let q_tilde = zkh(&bt, v_star ^ gf128::mul(u_star, delta));
+        let accepted = |a0: &[u128], a1: &[u128]| {
+            zkh(a0, v_star) == q_tilde ^ gf128::mul(zkh(a1, u_star), delta)
+        };
+        assert!(accepted(&a0, &a1));
+        for t in 0..circ.n_constraints {
+            let e = rand() | 1;
+            let mut bad = a0.clone();
+            bad[t] ^= e;
+            assert!(!accepted(&bad, &a1), "A0 term {t}");
+            let mut bad = a1.clone();
+            bad[t] ^= e;
+            assert!(!accepted(&a0, &bad), "A1 term {t}");
         }
     }
 }

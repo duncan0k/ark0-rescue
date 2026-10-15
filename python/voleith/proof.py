@@ -101,10 +101,11 @@ def prove(statement, witness, message, rng=None):
 
 
 def _prove_impl(statement, witness, message, rng, enforce_relation, trace=False,
-                witness_bits_override=None, tamper_corrections=None, split=SPLIT):
-    """Prover core. `enforce_relation=False`, `witness_bits_override` and
-    `tamper_corrections` exist only so tests can play a cheating prover;
-    prove() never uses them."""
+                witness_bits_override=None, tamper_corrections=None, tamper_terms=None,
+                split=SPLIT):
+    """Prover core. `enforce_relation=False`, `witness_bits_override`,
+    `tamper_corrections` and `tamper_terms` exist only so tests can play a
+    cheating prover; prove() never uses them."""
     if (not isinstance(statement, Statement) or type(statement.statement_id) is not int
             or statement.statement_id not in REGISTRY):
         raise ValueError("unknown statement")
@@ -159,6 +160,10 @@ def _prove_impl(statement, witness, message, rng, enforce_relation, trace=False,
     # Phase 3: QuickSilver, chall3.
     rows = vole.columns_to_rows(v_cols, ell + LAMBDA)
     a0, a1 = circ.prover_terms(pub_bits, wit_bits, rows)
+    if tamper_terms is not None:
+        if enforce_relation:
+            raise ValueError("tampering is for cheating-prover tests only")
+        a0, a1 = tamper_terms(list(a0), list(a1))
     u_star = (u >> ell) & gf128.MASK
     v_star = _q_star(rows, ell)
     zk = ZkHash(chall2)

@@ -10,6 +10,7 @@ import unittest
 from voleith import gf128
 from voleith import sha256_gadgets as g
 from voleith.circuit import Builder
+from voleith.unihash import ZkHash
 
 
 def small_circuit(n=4):
@@ -80,6 +81,38 @@ class TestQuickSilverIdentity(unittest.TestCase):
             bad = list(wit)
             bad[pos] ^= 1
             self.assertGreater(sum(self.terms(pub, bad)), 0, pos)
+
+    def test_any_single_tampered_term_is_rejected(self):
+        """The check of SPEC §6.3 (b~ = q~ + a~ * Delta, with a~ = ZKH(A1; u*),
+        b~ = ZKH(A0; v*), q~ = ZKH(B; q*)) fails when the prover changes any
+        single term A0_t or A1_t of an honest witness, for every t."""
+        n = self.n
+        x, y, p = 5, 9, 3
+        z = (x + y + p) % (1 << n)
+        pub = bits(p, n) + bits(z, n)
+        _, wit, ok = self.circ.evaluate(pub, bits(x, n) + bits(y, n))
+        self.assertTrue(ok)
+        delta = self.rng.getrandbits(128)
+        tags = [self.rng.getrandbits(128) for _ in wit]
+        keys = [t ^ (delta if w else 0) for t, w in zip(tags, wit)]
+        a0, a1 = self.circ.prover_terms(pub, wit, tags)
+        bt = self.circ.verifier_terms(pub, keys, delta)
+        zk = ZkHash(self.rng.randbytes(64))
+        u_star, v_star = self.rng.getrandbits(128), self.rng.getrandbits(128)
+        q_tilde = zk(bt, v_star ^ gf128.mul(u_star, delta))
+
+        def accepted(a0, a1):
+            return zk(a0, v_star) == q_tilde ^ gf128.mul(zk(a1, u_star), delta)
+
+        self.assertTrue(accepted(a0, a1))
+        self.assertEqual(len(a0), self.circ.n_constraints)
+        self.assertGreater(self.circ.n_mul, 0)
+        self.assertGreater(self.circ.n_assert, 0)
+        for t in range(len(a0)):
+            for which in (0, 1):
+                terms = [list(a0), list(a1)]
+                terms[which][t] ^= self.rng.getrandbits(128) | 1
+                self.assertFalse(accepted(*terms), (t, which))
 
 
 if __name__ == "__main__":
