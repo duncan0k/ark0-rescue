@@ -217,8 +217,8 @@ have failed the control), `gf128::mul` **2.77** (382 / 381 ns),
 |---|---|---|---|
 | `prove()`, this branch | 1,000 | 2.14 | 27.92 / 27.94 ms |
 | `prove()`, this branch | 3,000 | 1.83 | 28.05 / 28.06 ms |
-| `prove()`, the old table prover (base `d8be989`) | 1,000 | 1.22 | 30.70 / 30.70 ms |
-| `prove()`, the old table prover (base `d8be989`) | 3,000 | 1.69 | 30.67 / 30.67 ms |
+| `prove()`, the old table prover (base `b32453d`) | 1,000 | 1.22 | 30.70 / 30.70 ms |
+| `prove()`, the old table prover (base `b32453d`) | 3,000 | 1.69 | 30.67 / 30.67 ms |
 
 How to read these results:
 - **The GF tests have power.** The leaky control and the old tables are
@@ -249,7 +249,7 @@ How to read these results:
 
 `cargo bench --bench prove_verify -- --runs 31` (new in this branch):
 statement 0x01, 96-byte message, single thread, pinned to one core
-(`taskset -c 1`). Base `d8be989` (this branch's first commit, which adds the
+(`taskset -c 1`). Base `b32453d` (this branch's first commit, which adds the
 bench to unchanged code) and the final head, built separately, run
 alternately in three rounds of 31 runs each:
 
@@ -291,8 +291,8 @@ was not resolved more precisely. The prover is about 4× slower there (§1).
 
 ## 6. Tests
 
-- `cargo test`: 31 passed (21 unit, 1 cold-reject, 2 differential, 7
-  vectors), plus 2 ignored timing tests. The same in `--release` and in the
+- Before the review fixes: `cargo test`: 31 passed (21 unit, 1
+  cold-reject, 2 differential, 7 vectors), plus 2 ignored timing tests. The same in `--release` and in the
   dev profile with debug assertions.
 - `cargo clippy --all-targets` and `--all-targets --all-features` are clean.
   `cargo fmt --check` passes.
