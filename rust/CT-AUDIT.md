@@ -1,0 +1,243 @@
+# Constant-time and zeroization audit of the Rust prover
+
+Finding F7 of the 2026-10-14 internal review: the prover multiplied in
+GF(2^128) with 64 KiB tables (and 16-entry windows) indexed by secret data,
+and it did not zeroize secrets. This document records what was changed on
+branch `cloud/t3-ct-prover`, what was checked, the timing-test results and
+what remains open. It does not change the protocol, SPEC.md or the Python
+reference. Every proof is byte-identical to before (all KAT and differential
+vectors reproduce with the same fixed ρ).
+
+**Status.** This is evidence from one audit on one machine, not a proof of
+constant-time behaviour. An independent review should come before any real
+seed is used. SPEC.md §13.3 and §14 item 2 still describe both provers as
+test-only. They were deliberately left unchanged and should be revised by
+the spec owner after that review.
+
+## 1. GF(2^128) arithmetic
+
+| Function | Used by | Constant time | How |
+|---|---|---|---|
+| `gf128::mul` | prover (all secret products), `ZkHash::finish`, verifier on CLMUL CPUs | yes | PCLMULQDQ if `is_x86_feature_detected!("pclmulqdq")`, else `mul_portable` |
+| `gf128::mul_portable` | prover on CPUs without PCLMULQDQ | yes | bit-serial: 3 × 64 iterations of shift, mask `0 - bit`, XOR (Karatsuba), shift-only reduction |
+| `gf128::mul_x`, `reduce` | both | yes | fixed shifts; `mul_x` masks instead of multiplying |
+| `gf128::mul_public`, `FixedMul` | verifier only | only on CLMUL CPUs | on CLMUL CPUs they are `gf128::mul`; otherwise the old 4-bit-window multiply and 64 KiB tables (public data only) |
+| `unihash::CtMul` / `FixedMul` | `VoleHash<M>`, `ZkHash<M>` | — | the hashes are generic over the key multiplier: the prover instantiates `CtMul`, the verifier `FixedMul`. The prover never reaches a table, and the type system enforces it |
+
+The only CPU-dependent choice is whether PCLMULQDQ is present. It depends on
+the CPU, never on data. Both paths give identical products: unit tests compare
+`mul`, `mul_portable`, `mul_public`, the table path and a bit-by-bit
+reference on edge cases and 2,000 random pairs. A temporary build that forced
+`mul_portable` everywhere produced the same proof hash
+(`ad6beb93…ef00`).
+
+**Generated code.** Checked in the release build on x86-64 (rustc 1.97.0):
+- `clmul::mul_hw` is straight-line: four `pclmulqdq`, then shifts and XORs.
+  It has no branch.
+- The portable loop compiles to `bt` + `sbb` masks. Its only `cmov`/`jne`
+  depend on the public loop counter (the u128 shift amount and the loop
+  exit).
+
+**Shared or separate for verify.** The task allowed one shared constant-time
+implementation if it cost at most 10% on verify. On PCLMULQDQ hardware the
+shared constant-time multiply is *faster* than the tables: it skips five
+64 KiB table builds per call and is cheaper per product. So the verifier uses
+it there (−12% verify time, §5). On CPUs without a carry-less instruction the
+portable constant-time multiply is about 4× slower than the tables. Measured
+with everything forced portable: prove 124.5 ms, verify 106.2 ms (median of
+21), against 28/24 ms. So the verifier keeps its table fallback only there.
+Its inputs are public. aarch64 PMULL is not implemented: an aarch64 prover
+uses the portable path, an aarch64 verifier the tables. The crate checks
+clean for aarch64 and i686.
+
+## 2. Audit of the prover for secret-dependent branches and indexing
+
+Secrets: witness x and its bits, every wire value and witness bit, ρ, rnd,
+r, the tree roots, node and leaf seeds, the leaf expansions, u (including
+u_i), v (columns and rows), the MACs, the QuickSilver terms and accumulators,
+u*, v*.
+
+Public: the statement, μ, iv_pre, iv, the challenges (and Δ, j*), every
+proof field, all lengths, and the circuit (instruction list, wire kinds).
+
+| Code | Finding | Action |
+|---|---|---|
+| `VoleHash::hash` on u and v columns | **was** a secret-indexed 64 KiB table (`FixedMul`) | now `CtMul` |
+| `ZkHash::absorb` on QuickSilver terms | **was** a secret-indexed 64 KiB table | now `CtMul` |
+| `Circuit::prover_terms` `mul(ma, mb)` | **was** secret-indexed 16-entry windows | now `gf128::mul` |
+| `ZkHash::finish`, `mask_element` (`mul_x`) | windows / integer multiply by the top bit | `gf128::mul`; masked `mul_x` |
+| `Circuit::evaluate` ASSERT check | **was** `if a&b != c { ok = false }`, a branch on secret wires | now `bad \|= (a&b)^c` |
+| relation check `s1_hmac(..) != y` | **was** an early-exit `[u8; 32]` comparison | now `ct_eq` (OR of XORs). The verdict itself (RelationFails) is the intended output |
+| `prover_terms` other ops | XOR/NOT on values; `AndSP` masks with a **public** bit; `Mul`/`Assert` mask with secret bits via `0 - bit` | no branch; wire indices come from the public instruction list |
+| SHA-256 / HMAC (`sha256.rs`) | ARX only; `K256[t]` indexed by the round counter; branches on lengths only; the HMAC key is public | none needed |
+| SHAKE256 (`sha3`/`keccak 0.1.6`, no `asm`) | Keccak-f is ARX with fixed round constants; buffering branches on lengths only | none needed |
+| GGM `vc::commit` | loop over all nodes and leaves in fixed order | none needed |
+| GGM `Tree::open(j*)` | indexes by j*, from the public challenge | fine (public) |
+| `vole::expand_leaf`, `convert` | leaf index and climb depth come from the loop counter | none needed |
+| `columns_to_rows`, `bits::load_bits`, `clear_padding` | indices and shifts from public positions only | none needed |
+| `d` encoding loop | `w_bits.get(i)` bounds check on a public index; `bit << b` | none needed |
+| `s1_secret_bits` | shifts only | rewritten to allocate once (see §3) |
+| allocation sizes, loop counts, early returns | depend on the statement, lengths and witness *validity* only | fine |
+| `Xof` tags, `trace` option, CPU feature check | not data | fine |
+
+No integer division or modulo touches secrets. The only integer multiply on
+a secret value (`mul_x`) was removed. Variable shift amounts all come from
+loop counters.
+
+**Not checked by this audit:** the compiler's output beyond the two GF
+kernels above. The mask idioms (`0u128.wrapping_sub(bit) & x`) could in
+principle become branches under another compiler or target. Also not
+checked: microarchitectural effects below the instruction level (e.g.
+operand-dependent power) and the C ABI, which exposes only the verifier.
+
+## 3. Zeroization
+
+Dependency: `zeroize = "=1.8.2"`, `default-features = false`,
+`features = ["alloc"]`, with `Cargo.lock` committed. Why 1.8.2:
+- it is over a year old (2025-09-29);
+- its MSRV is 1.60, inside this crate's 1.85;
+- it lies in `sha3`'s `^1.6` range, so one copy serves both;
+- it pulls in no proc-macro (no `derive`).
+
+1.9.1 was nine days old. 1.9.0 had introduced new `optimization_barrier`
+code with an uninitialised-read bug that 1.9.1 fixed. A crate whose job is
+correctness under adversarial conditions should take the mature line. The
+`sha3` feature `zeroize` is enabled too, so the Keccak state is cleared when a
+hasher or XOF reader is dropped.
+
+Cleared when dropped (in `prove_impl` unless noted):
+
+| Secret | Mechanism |
+|---|---|
+| witness bits, all wire values (`evaluate`), witness bit vector `w_bits` | `Zeroizing<Vec<u8>>` |
+| rnd (r is a borrowed slice of it), tree roots | `Zeroizing` |
+| GGM node seeds, leaf seeds, commitments | `impl Drop for vc::Tree`; `expand`/`leaf` clear their XOF output |
+| u_i (all τ), u, v columns, VOLE rows | `Zeroizing<Vec<…>>` |
+| leaf expansions in ConvertToVOLE | `impl Drop for vole::ConvertScratch` |
+| wire bits and MACs in `prover_terms` | `Zeroizing<Vec<…>>` |
+| ZKHash accumulators | `impl Drop for ZkAcc` (no longer `Copy`) |
+| u*, v* | `Zeroizing<u128>` |
+| copy of x in `s1_hmac`, HMAC inner hash | `Zeroizing` |
+| SHA-256 chaining value, buffer, message schedule, block copy | `impl Drop for Sha256`, `w.zeroize()` in `compress` |
+| Keccak state | `sha3` feature `zeroize` |
+| `ProverTrace` (test-trace feature only) | `impl Drop` clears r and roots |
+
+Every secret vector is allocated at its final size: `with_capacity` matches
+the exact count, and `s1_secret_bits` no longer collects from an iterator
+with an unknown size. So no reallocation leaves an unzeroized copy behind on
+the heap.
+
+After `prove_impl` returns, `prove` (and `prove_traced`) calls
+`scrub_stack`, which overwrites 64 KiB of the stack below the caller's frame
+with volatile writes. This covers the frames where seeds, hash states and
+field elements were held.
+
+**Residual (known gaps):**
+- **The stack scrub is best effort.** Frame layout is the compiler's choice,
+  and registers or vector registers can hold secrets until reused. Signal
+  handlers and other threads are out of scope.
+- **`digest 0.10`'s block buffer** (up to 135 bytes of absorbed input, e.g.
+  the witness absorbed into `rnd`) and the XOF reader's output buffer (e.g.
+  the tail of the root-seed output) have no zeroize support. They live in
+  the prover's stack frames, so only the stack scrub covers them. Moving to
+  `sha3 0.11` / `digest 0.11` or a self-owned Keccak would close this.
+- **Caller-owned inputs.** `witness` and `rho` belong to the caller, who must
+  clear them.
+- **Paging and core dumps.** Swapped-out pages, core dumps and hibernation
+  are outside what `zeroize` can address (use `mlock`/`madvise` in the
+  caller).
+
+## 4. Statistical timing tests (dudect)
+
+`src/dudect.rs` holds the tests, `#[ignore]`d by default:
+
+```
+cargo test --release --lib dudect -- --ignored --nocapture --test-threads=1
+```
+
+How they work:
+- **Classes.** Fixed versus random secret inputs, interleaved in random order.
+- **Input generation.** As in dudect, the inputs for a whole chunk are
+  generated before any of its measurements.
+- **Statistic.** Welch's t on the raw timings and on timings cropped at the
+  p99/95/90/75/50 percentiles. The maximum |t| is reported, with 4.5 as the
+  threshold.
+- **GF measurements.** Each sample times 64 products.
+- **prove() measurements.** Each sample is one call on the real statement
+  (it cannot be made smaller): x and ρ fixed, or both random with matching
+  public y.
+
+Machine: Intel Xeon @ 2.80 GHz VM (pclmulqdq, avx2, avx512f), rustc 1.97.0,
+release profile.
+
+Final harness, n = 200,000 per GF row (20,000 for the control):
+
+| Target | run 1 | run 2 | run 3 | median fixed / random (64 ops) |
+|---|---|---|---|---|
+| control: leaky by construction (must fail) | 1,923 | 1,538 | 1,657 | 116 / 560 ns |
+| `gf128::mul` (PCLMULQDQ) | 1.90 | 2.38 | 1.42 | 548 / 548 ns |
+| `gf128::mul_portable` | 1.39 | 1.76 | 1.66 | 19,484 / 19,484 ns |
+| old `FixedMul` tables (now verifier only) | 1,303 | 1,282 | 1,266 | 711 / 787 ns |
+
+| Target | n | max \|t\| | median fixed / random |
+|---|---|---|---|
+| `prove()`, this branch | 1,000 | 2.14 | 27.92 / 27.94 ms |
+| `prove()`, this branch | 3,000 | 1.83 | 28.05 / 28.06 ms |
+| `prove()`, the old table prover (base `d8be989`) | 1,000 | 1.22 | 30.70 / 30.70 ms |
+| `prove()`, the old table prover (base `d8be989`) | 3,000 | 1.69 | 30.67 / 30.67 ms |
+
+How to read these results:
+- **The GF tests have power.** The leaky control and the old tables are
+  flagged at |t| > 1,000. The tables show a 10% timing difference between a
+  fixed and a random operand, which confirms F7 was a real, measurable leak.
+  Both constant-time multiplications stay below 2.4.
+- **The prove() test has almost no power.** The old prover, which certainly
+  leaks through its tables, passes it as clearly as the new one. A ~30 ms
+  call drowns a cache effect of a few nanoseconds per product in noise.
+  Treat the prove() row as a smoke test for gross leaks (secret-dependent
+  loop counts, early exits), not as evidence about cache timing. The
+  evidence for prove() is the audit in §2 together with the GF tests.
+- **An earlier harness version gave false alarms.** It generated
+  random-class operands inside the measurement loop (outside the timed
+  window). Six runs of it (one at n = 50,000, five at 200,000) gave max |t|
+  of 3.00, 2.02, 5.39, 13.86, 3.29 and 7.93 for `mul`, and 1.92, 6.20, 4.29,
+  6.91, 6.43 and 5.27 for `mul_portable`. The
+  generated code has no data-dependent instruction, and the values dropped
+  below 2.4 once both classes ran identical code between timer reads. So
+  they are attributed to that artefact. They are recorded here because a
+  timing test that only reports its passing runs is worth little.
+- **What a pass means.** It means this machine, this build and this many
+  samples showed no difference. It does not cover other CPUs or compilers,
+  and it does not cover attackers with finer probes (cache-line monitoring,
+  SMT co-residence, power).
+
+## 5. Benchmarks
+
+`cargo bench --bench prove_verify -- --runs 31` (new in this branch):
+statement 0x01, 96-byte message, single thread, pinned to one core
+(`taskset -c 1`). Base `d8be989` (this branch's first commit, which adds the
+bench to unchanged code) and the final head, built separately, run
+alternately in three rounds of 31 runs each:
+
+| | before (median of each round) | after (median of each round) | delta |
+|---|---|---|---|
+| prove | 29.85 / 29.86 / 30.04 ms | 27.86 / 28.01 / 28.06 ms | **−6.4%** |
+| verify | 27.40 / 27.28 / 27.32 ms | 24.12 / 24.08 / 24.12 ms | **−11.7%** |
+
+Both binaries produce the same proof (130,218 bytes, sha256
+`ad6beb9321612f18b3fd7164910be60692bab88c21c636aa42e346d729c7ef00`).
+The cost of zeroization and the 64 KiB stack scrub was not measured
+separately. The "after" numbers include it, and the CLMUL speedup more than
+covers it. On a CPU without PCLMULQDQ the prover would
+be about 4× slower (§1). The verifier would run as before.
+
+## 6. Tests
+
+- `cargo test`: 31 passed (21 unit, 1 cold-reject, 2 differential, 7
+  vectors), plus 2 ignored timing tests. The same in `--release` and in the
+  dev profile with debug assertions.
+- `cargo clippy --all-targets` and `--all-targets --all-features` are clean.
+  `cargo fmt --check` passes.
+- `cargo check --lib` passes for `aarch64-unknown-linux-gnu` and
+  `i686-unknown-linux-gnu` (the portable path). They were not run: there is
+  no cross toolchain here.

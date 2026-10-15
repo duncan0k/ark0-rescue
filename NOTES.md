@@ -89,23 +89,30 @@ code less independently than the internal review's re-implementation did.
   multiplication tables), plus about 8 MB for the circuit, built once per
   process (8–10 ms).
 - **Prover.** Reproduces the Python proofs byte for byte from the same ρ (the
-  4 vectors and the 100 differential cases). Like the reference it is not
-  constant time and does not zeroize; it is for tests and tools.
+  4 vectors and the 100 differential cases). Since branch
+  `cloud/t3-ct-prover` (finding F7) its GF(2^128) arithmetic and control flow
+  on secret data are constant time and it zeroizes its secrets; see
+  `rust/CT-AUDIT.md` for what was checked, the dudect results and what
+  remains. The Python reference is unchanged and still test-only.
 - **Unsafe code.** The crate root has `#![deny(unsafe_code)]` and every module
-  `#![forbid(unsafe_code)]`, except `src/ffi.rs`. That shim checks every length
+  `#![forbid(unsafe_code)]`, except `src/ffi.rs` and `src/clmul.rs` (the
+  PCLMULQDQ intrinsics, called only after run-time detection). The C shim checks every length
   first (`k_len` 1–64, `msg_len` ≤ 65,535, `proof_len` = the proof length,
   130,218 in v0.2, `y` not null; a null pointer only with length 0), then makes slices, and runs the
   verifier under `catch_unwind` (release builds keep `panic = "unwind"`).
-- **Portable arithmetic.** GF(2^128) products use a 4-bit-window carry-less
-  multiply and 64 KiB tables for fixed multipliers; no CLMUL or AES
-  instruction is used, so a generic x86-64 build is representative.
+- **Arithmetic.** GF(2^128) products use PCLMULQDQ when the CPU has it
+  (run-time detection), otherwise a portable bit-serial constant-time multiply
+  in the prover and, for the verifier's public data only, a 4-bit-window
+  multiply and 64 KiB tables for fixed multipliers. No AES instruction is
+  used.
 - **Dependencies.** Runtime: `sha3 =0.10.9` (RustCrypto, for SHAKE256), which
   brings `digest 0.10.7`, `block-buffer 0.10.4`, `crypto-common 0.1.7`,
   `generic-array 0.14.7`, `typenum 1.20.1`, `keccak 0.1.6`, `version_check
   0.9.5` (build only) and, on aarch64 only, `cpufeatures 0.2.17` and
   `libc 0.2.190`. SHA-256 and HMAC (for the HMAC midstates, the circuit digest
   and the prover's relation check) are implemented in the crate instead of
-  adding `sha2`. Dev only: `serde_json =1.0.149` and `secp256k1 =0.31.1`
+  adding `sha2`. `zeroize =1.8.2` (no default features but `alloc`; also
+  enabled in `sha3`) clears the prover's secrets; see `rust/CT-AUDIT.md`. Dev only: `serde_json =1.0.149` and `secp256k1 =0.31.1`
   (`secp256k1-sys 0.11.0` with libsecp256k1 v0.6.0, compiled by gcc 12.2 at
   `-O3` without the x86-64 assembly, `ECMULT_WINDOW_SIZE` 15). `Cargo.lock`
   holds `cc` at 1.4.7 because 1.8.0 was three days old.
@@ -522,15 +529,18 @@ none overlapped minutes x4 or x5 or another workload's six-hourly job
   degree-≤6 E3 encoding of R1 and a degree-d QuickSilver check, which v0.1
   does not have. R1 estimates the proof at about 296 kB.
 - **Rust.** Verifier, prover and differential tests are done (see "Rust
-  verifier"). Still open: fuzzing of the verifier, and a constant-time
-  prover.
+  verifier"). Still open: fuzzing of the verifier, and an independent
+  review of the constant-time Rust prover (`rust/CT-AUDIT.md`).
 - **Core integration.** Annex TLV, rescue sighash with `key_version = 0x03`,
   the rescue token, validation weight and policy (M4-R design).
 - **Review.** Two internal reviews are done (section "2026-10-14 internal
   reviews"). Still open: a written security note with every bound derived,
   not sketched, and the external cryptographer review that R1 recommends
   before H4R.
-- **Constant-time prover and zeroization.** The Python reference has neither.
+- **Constant-time prover and zeroization.** The Rust prover has both
+  (`rust/CT-AUDIT.md`); the Python reference has neither. SPEC §13.3 and §14
+  item 2 still describe the Rust prover as test-only and are to be revised
+  after review.
 - **Further tests from R1 §7.**
   - Toy-parameter statistics (λ = 16, τ = 1, k = 4, where a cheating prover
     should succeed about 2^−k of the time): this engine is not generic in λ.
