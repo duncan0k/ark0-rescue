@@ -167,7 +167,12 @@ fn prover_reproduces_vectors_byte_for_byte() {
         let x = hex(str_of(v, "witness_x"));
         let mut rho = [0u8; 32];
         rho.copy_from_slice(&hex(str_of(v, "rho")));
-        let (proof, t) = voleith::prove(sid, &pub_inputs, &x, &msg, &rho).expect("prove");
+        let (proof, t) = voleith::prove_traced(sid, &pub_inputs, &x, &msg, &rho).expect("prove");
+        assert_eq!(
+            voleith::prove(sid, &pub_inputs, &x, &msg, &rho).expect("prove"),
+            proof,
+            "{desc} prove and prove_traced"
+        );
         let im = &v["intermediates"];
         assert_eq!(to_hex(&t.mu), str_of(im, "mu"), "{desc} mu");
         assert_eq!(to_hex(&t.r), str_of(im, "r"), "{desc} r");
@@ -223,7 +228,7 @@ fn prover_refuses_bad_inputs() {
         RelationFails
     );
     // A fresh rho gives a different proof that still verifies.
-    let (p1, _) = voleith::prove(1, &pub_inputs, &x, &msg, &[7u8; 32]).unwrap();
+    let p1 = voleith::prove(1, &pub_inputs, &x, &msg, &[7u8; 32]).unwrap();
     assert_ne!(to_hex(&p1), str_of(v, "proof"));
     assert!(voleith::verify(1, &pub_inputs, &msg, &p1));
 }

@@ -27,6 +27,12 @@ mod vole;
 pub use proof::{
     proof_length, prove, verify, verify_traced, ProveError, ProverTrace, VerifierTrace,
 };
+
+/// The prover with its intermediate values, secrets included: for the vector
+/// tests only (feature `test-trace`).
+#[cfg(feature = "test-trace")]
+#[doc(hidden)]
+pub use proof::prove_traced;
 pub use statements::{s1_encode_public, STATEMENT1_ID};
 
 /// Other tree splits, for the benchmark only (feature `bench-splits`).

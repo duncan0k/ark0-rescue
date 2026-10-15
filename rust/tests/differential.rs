@@ -129,7 +129,7 @@ fn prover_reproduces_differential_proofs() {
             &hex(str_of(v, "message")),
             &rho,
         ) {
-            Ok((proof, _)) if base64(str_of(v, "proof_b64")) == proof => None,
+            Ok(proof) if base64(str_of(v, "proof_b64")) == proof => None,
             Ok(_) => Some(format!("{id}: proof bytes differ")),
             Err(e) => Some(format!("{id}: prover refused: {e:?}")),
         }

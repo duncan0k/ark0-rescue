@@ -359,6 +359,7 @@ dependencies = [
  "secp256k1",
  "serde_json",
  "sha3",
+ "voleith",
 ]
 
 [[package]]

@@ -2,7 +2,9 @@
 //!
 //! `verify` and `prove` use the parameter set of this version
 //! (`params::SPLIT`). Other tree splits are reachable only through the
-//! `bench` module, which exists only with the `bench-splits` feature.
+//! `bench` module, which exists only with the `bench-splits` feature. The
+//! prover's intermediate values, which include secrets, are reachable only
+//! through `prove_traced`, which exists only with the `test-trace` feature.
 
 #![forbid(unsafe_code)]
 
@@ -308,8 +310,12 @@ pub enum ProveError {
     RelationFails,
 }
 
-/// Prover-side values, for comparison with the vectors' intermediates.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The prover's intermediate values, for comparison with the vectors'
+/// intermediates; only `prove_traced` (cargo feature `test-trace`) fills it.
+/// It holds the root seed `r` and the tree roots, from which the witness can
+/// be recovered, so it has no `Debug` and `prove` never produces it.
+#[doc(hidden)]
+#[derive(Default)]
 pub struct ProverTrace {
     pub mu: [u8; 32],
     pub r: [u8; 16],
@@ -340,7 +346,7 @@ pub fn prove(
     witness: &[u8],
     message: &[u8],
     rho: &[u8; RHO_BYTES],
-) -> Result<(Vec<u8>, ProverTrace), ProveError> {
+) -> Result<Vec<u8>, ProveError> {
     let def = statements::lookup(statement_id).ok_or(ProveError::UnknownStatement)?;
     prove_impl(
         def,
@@ -350,9 +356,37 @@ pub fn prove(
         witness,
         message,
         rho,
+        None,
     )
 }
 
+/// `prove`, also returning the prover's intermediate values, secrets
+/// included. For the vector tests only (cargo feature `test-trace`).
+#[cfg(feature = "test-trace")]
+#[doc(hidden)]
+pub fn prove_traced(
+    statement_id: u8,
+    public_inputs: &[u8],
+    witness: &[u8],
+    message: &[u8],
+    rho: &[u8; RHO_BYTES],
+) -> Result<(Vec<u8>, ProverTrace), ProveError> {
+    let def = statements::lookup(statement_id).ok_or(ProveError::UnknownStatement)?;
+    let mut trace = ProverTrace::default();
+    let proof = prove_impl(
+        def,
+        &def.layout,
+        statement_id,
+        public_inputs,
+        witness,
+        message,
+        rho,
+        Some(&mut trace),
+    )?;
+    Ok((proof, trace))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn prove_impl(
     def: &StatementDef,
     lay: &Layout,
@@ -361,7 +395,8 @@ fn prove_impl(
     witness: &[u8],
     message: &[u8],
     rho: &[u8; RHO_BYTES],
-) -> Result<(Vec<u8>, ProverTrace), ProveError> {
+    trace: Option<&mut ProverTrace>,
+) -> Result<Vec<u8>, ProveError> {
     let parsed =
         statements::s1_parse_public(public_inputs).ok_or(ProveError::MalformedPublicInputs)?;
     if message.len() > MAX_MESSAGE_LEN {
@@ -497,23 +532,25 @@ fn prove_impl(
     proof.extend_from_slice(&chall3);
     debug_assert_eq!(proof.len(), lay.total);
 
-    let trace = ProverTrace {
-        mu,
-        r,
-        iv_pre,
-        iv,
-        roots,
-        tree_hashes: trees.iter().map(|t| t.hash).collect(),
-        hcom,
-        chall1,
-        u_tilde,
-        h_v,
-        chall2: chall2.to_vec(),
-        a_tilde,
-        b_tilde,
-        chall3,
-    };
-    Ok((proof, trace))
+    if let Some(slot) = trace {
+        *slot = ProverTrace {
+            mu,
+            r,
+            iv_pre,
+            iv,
+            roots,
+            tree_hashes: trees.iter().map(|t| t.hash).collect(),
+            hcom,
+            chall1,
+            u_tilde,
+            h_v,
+            chall2: chall2.to_vec(),
+            a_tilde,
+            b_tilde,
+            chall3,
+        };
+    }
+    Ok(proof)
 }
 
 /// Other tree splits, for the benchmark only (cargo feature `bench-splits`).
@@ -565,7 +602,7 @@ pub mod bench {
             witness,
             message,
             rho,
+            None,
         )
-        .map(|(p, _)| p)
     }
 }
