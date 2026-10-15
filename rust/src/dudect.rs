@@ -74,17 +74,31 @@ impl Moments {
     }
 }
 
+/// Welch's t of class `a` against class `b`.
+///
+/// - Fewer than 2 samples in a class: the variance is undefined and the
+///   test cannot decide, so the result is NaN. Every `|t| < threshold`
+///   check is false for NaN, so an undecidable test fails rather than
+///   passes.
+/// - Zero variance in both classes: the classes are fully distinguishable
+///   if their means differ, so the result is a signed infinity; equal means
+///   give 0.
 fn welch_t(a: &Moments, b: &Moments) -> f64 {
     if a.n < 2.0 || b.n < 2.0 {
-        return 0.0;
+        return f64::NAN;
     }
     let va = a.m2 / (a.n - 1.0);
     let vb = b.m2 / (b.n - 1.0);
     let den = (va / a.n + vb / b.n).sqrt();
+    let diff = a.mean - b.mean;
     if den == 0.0 {
-        0.0
+        if diff == 0.0 {
+            0.0
+        } else {
+            diff.signum() * f64::INFINITY
+        }
     } else {
-        (a.mean - b.mean) / den
+        diff / den
     }
 }
 
@@ -101,6 +115,9 @@ struct Report {
 /// Welch's t over the raw timings and over timings at or below each of a
 /// few upper percentiles of the pooled distribution (dudect's cropping,
 /// which removes interrupts and other long-tail noise).
+///
+/// An undecidable crop (NaN, see [`welch_t`]) makes `max_t` NaN, so the
+/// report fails every threshold check.
 fn analyse(samples: &[(bool, f64)]) -> Report {
     let mut pooled: Vec<f64> = samples.iter().map(|s| s.1).collect();
     pooled.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -123,6 +140,11 @@ fn analyse(samples: &[(bool, f64)]) -> Report {
             }
         }
         let t = welch_t(&f, &r);
+        if t.is_nan() {
+            max_t = f64::NAN;
+            worst = format!("{name}, undecidable");
+            break;
+        }
         if t.abs() > max_t.abs() {
             max_t = t;
             worst = name.clone();
@@ -143,6 +165,14 @@ fn analyse(samples: &[(bool, f64)]) -> Report {
         median_fixed: median(true),
         median_random: median(false),
         n: samples.len(),
+    }
+}
+
+impl Report {
+    /// Whether the test passes: |t| below the threshold. False for an
+    /// undecidable (NaN) or infinite t.
+    fn passes(&self) -> bool {
+        self.max_t.abs() < T_THRESHOLD
     }
 }
 
@@ -261,11 +291,8 @@ fn dudect_gf128_mul() {
     let fixed_table = measure_gf(&mut rng, n, fixed, random, |_, x| tables.mul(x));
     print("FixedMul tables (verifier only, not CT)", &fixed_table);
 
-    assert!(ct.max_t.abs() < T_THRESHOLD, "gf128::mul: |t| too large");
-    assert!(
-        portable.max_t.abs() < T_THRESHOLD,
-        "gf128::mul_portable: |t| too large"
-    );
+    assert!(ct.passes(), "gf128::mul: |t| too large");
+    assert!(portable.passes(), "gf128::mul_portable: |t| too large");
 }
 
 #[test]
@@ -323,5 +350,43 @@ fn dudect_prove() {
     }
     let r = analyse(&out);
     print("prove()", &r);
-    assert!(r.max_t.abs() < T_THRESHOLD, "prove(): |t| too large");
+    assert!(r.passes(), "prove(): |t| too large");
+}
+
+/// Welch's t must not pass a fully distinguishable sample: 100 samples of
+/// 100 ns against 100 of 200 ns have zero variance in each class, and an
+/// earlier version returned t = 0 for them (raw and every crop).
+#[test]
+fn welch_t_zero_variance_distinct_means() {
+    let samples: Vec<(bool, f64)> = (0..200)
+        .map(|i| (i % 2 == 0, if i % 2 == 0 { 100.0 } else { 200.0 }))
+        .collect();
+    let r = analyse(&samples);
+    assert_eq!(r.max_t, f64::NEG_INFINITY);
+    assert!(!r.passes());
+
+    let (mut a, mut b) = (Moments::default(), Moments::default());
+    for _ in 0..100 {
+        a.push(100.0);
+        b.push(200.0);
+    }
+    assert_eq!(welch_t(&a, &b), f64::NEG_INFINITY);
+    assert_eq!(welch_t(&b, &a), f64::INFINITY);
+    assert_eq!(welch_t(&a, &a), 0.0);
+}
+
+/// Fewer than 2 samples in a class is undecidable and must fail the test.
+#[test]
+fn welch_t_too_few_samples_fails() {
+    let (mut a, mut b) = (Moments::default(), Moments::default());
+    a.push(100.0);
+    for x in [100.0, 101.0, 99.0] {
+        b.push(x);
+    }
+    assert!(welch_t(&a, &b).is_nan());
+    assert!(welch_t(&Moments::default(), &b).is_nan());
+    let samples = [(true, 100.0), (false, 100.0), (false, 101.0)];
+    let r = analyse(&samples);
+    assert!(r.max_t.is_nan());
+    assert!(!r.passes());
 }

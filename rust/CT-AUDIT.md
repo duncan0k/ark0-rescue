@@ -168,7 +168,12 @@ How they work:
   generated before any of its measurements.
 - **Statistic.** Welch's t on the raw timings and on timings cropped at the
   p99/95/90/75/50 percentiles. The maximum |t| is reported, with 4.5 as the
-  threshold.
+  threshold. Zero variance with different class means gives a signed
+  infinite t (fully distinguishable), and fewer than 2 samples in a class
+  gives NaN (undecidable); both fail the test. Before 2026-10-15 (review
+  finding F2) both cases returned t = 0 and passed: 100 samples of 100 ns
+  against 100 of 200 ns gave t = 0 raw and for every crop. A unit test now
+  covers that sample.
 - **GF measurements.** Each sample times 64 products.
 - **prove() measurements.** Each sample is one call on the real statement
   (it cannot be made smaller): x and ρ fixed, or both random with matching
@@ -185,6 +190,14 @@ Final harness, n = 200,000 per GF row (20,000 for the control):
 | `gf128::mul` (PCLMULQDQ) | 1.90 | 2.38 | 1.42 | 548 / 548 ns |
 | `gf128::mul_portable` | 1.39 | 1.76 | 1.66 | 19,484 / 19,484 ns |
 | old `FixedMul` tables (now verifier only) | 1,303 | 1,282 | 1,266 | 711 / 787 ns |
+
+Rerun once after the F2 fix (`cargo test --release --lib dudect_gf128 --
+--ignored --nocapture --test-threads=1`, pinned with `taskset -c 1`,
+n = 200,000, 20,000 for the control), on an Intel Xeon @ 2.10 GHz VM with
+PCLMULQDQ: control 820.10 (must fail; 115 / 395 ns), `gf128::mul` **1.06**
+(385 / 385 ns), `gf128::mul_portable` **1.03** (16,419 / 16,419 ns), old
+`FixedMul` tables 383.03 (706 / 787 ns). Max |t| of the two constant-time
+multiplications: 1.06.
 
 | Target | n | max \|t\| | median fixed / random |
 |---|---|---|---|
