@@ -1,4 +1,4 @@
-"""VOLE-in-the-head rescue proofs, reference implementation of SPEC.md v0.1.
+"""VOLE-in-the-head rescue proofs, reference implementation of SPEC.md v0.2.
 
 Standard library only. Not constant time; not for production signing.
 """

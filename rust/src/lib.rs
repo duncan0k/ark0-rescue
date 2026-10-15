@@ -1,4 +1,4 @@
-//! VOLE-in-the-head rescue proofs: Rust implementation of `SPEC.md` v0.1.
+//! VOLE-in-the-head rescue proofs: Rust implementation of `SPEC.md` v0.2.
 //!
 //! The verifier follows SPEC.md §11: every length and format check happens
 //! before any parsing of proof contents or hashing, and any failure is a

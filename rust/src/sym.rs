@@ -2,7 +2,7 @@
 //!
 //! Every hash, PRG and random-oracle call is
 //! `SHAKE256( u8(|T|) || T || data, L )` with
-//! `T = "VOLEitH-rescue/v0.1/" || name`.
+//! `T = "VOLEitH-rescue/v0.2/" || name`.
 
 #![forbid(unsafe_code)]
 
