@@ -19,7 +19,7 @@ the spec owner after that review.
 | Function | Used by | Constant time | How |
 |---|---|---|---|
 | `gf128::mul` | prover (all secret products), `ZkHash::finish`, verifier on CLMUL CPUs | yes | PCLMULQDQ if `is_x86_feature_detected!("pclmulqdq")`, else `mul_portable` |
-| `gf128::mul_portable` | prover on CPUs without PCLMULQDQ | yes | bit-serial: 3 × 64 iterations of shift, mask `0 - bit`, XOR (Karatsuba), shift-only reduction |
+| `gf128::mul_portable` | on CPUs without PCLMULQDQ: the prover, and the verifier's `ZkHash::finish` | yes | bit-serial: 3 × 64 iterations of shift, mask `0 - bit`, XOR (Karatsuba), shift-only reduction |
 | `gf128::mul_x`, `reduce` | both | yes | fixed shifts; `mul_x` masks instead of multiplying |
 | `gf128::mul_public`, `FixedMul` | verifier only | only on CLMUL CPUs | on CLMUL CPUs they are `gf128::mul`; otherwise the old 4-bit-window multiply and 64 KiB tables (public data only) |
 | `unihash::CtMul` / `FixedMul` | `VoleHash<M>`, `ZkHash<M>` | — | the hashes are generic over the key multiplier: the prover instantiates `CtMul` explicitly (`proof.rs`, `VoleHash::<CtMul>` and `ZkHash::<CtMul>`), the verifier `FixedMul`. The type system does not enforce this: `FixedMul` also implements `KeyMul`, so swapping it in would still compile. That the prover reaches no table rests on the explicit instantiation and on the review of its call paths (§2) |
@@ -50,7 +50,8 @@ Its inputs are public. It does not run exactly as before there, though:
 `ZkHash::finish` now uses the portable constant-time multiply (two products
 per call), and the zeroization of shared types (SHA-256, Keccak, GGM expansion,
 VOLE scratch) adds work. Measured in that configuration in §5. aarch64 PMULL is not implemented: an aarch64 prover
-uses the portable path, an aarch64 verifier the tables. The crate checks
+uses the portable path; an aarch64 verifier uses the tables, except in
+`ZkHash::finish`, which uses the portable path. The crate checks
 clean for aarch64 and i686.
 
 ## 2. Audit of the prover for secret-dependent branches and indexing

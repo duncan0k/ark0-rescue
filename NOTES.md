@@ -83,11 +83,13 @@ code less independently than the internal review's re-implementation did.
 
 - **Verifier.** SPEC §11 in order: statement id, canonical public inputs,
   message length, proof length, header and padding bits are checked before any
-  parsing of proof contents or hashing. After those checks the work does not
-  depend on the proof. Every buffer size is fixed by the statement: about
-  6 MB per call (VOLE columns and rows 1.4 MB, wire keys 4.1 MB, five 64 KiB
-  multiplication tables), plus about 8 MB for the circuit, built once per
-  process (8–10 ms).
+  parsing of proof contents or hashing. After those checks the work is
+  bounded but not constant: it varies with the bits of the public challenge
+  `Δ` (a conditional XOR per set bit; SPEC §11, properties). Every buffer
+  size is fixed by the statement: about 6 MB per call (VOLE columns and rows
+  1.4 MB, wire keys 4.1 MB, and on CPUs without PCLMULQDQ five 64 KiB
+  multiplication tables, which the fallback path alone allocates), plus
+  about 8 MB for the circuit, built once per process (8–10 ms).
 - **Prover.** Reproduces the Python proofs byte for byte from the same ρ (the
   4 vectors and the 100 differential cases). Since 2026-10-15
   (finding F7) its GF(2^128) arithmetic and control flow
