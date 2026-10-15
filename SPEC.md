@@ -424,13 +424,14 @@ ids 0 and 1):
 
 | call | rule |
 |---|---|
-| `XOR(a,b)` | both constant: return `a⊕b`. Exactly one constant `κ`, other wire `w`: return `w` if `κ = 0`, else `NOT(w)`. Otherwise emit `XOR(a,b)`. |
+| `XOR(a,b)` | both constant: return `a⊕b`. Exactly one constant `κ`, other wire `w`: return `w` if `κ = 0`, else return the result of the call `NOT(w)` below, which emits a NOT instruction (never `XOR(w,1)`). Otherwise emit `XOR(a,b)`. |
 | `AND(a,b)` | both constant: return `a∧b`. Exactly one constant `κ`, other `w`: return `w` if `κ = 1`, else constant 0. Otherwise emit `AND(a,b)`. |
 | `NOT(a)` | constant: return `1−a`. Otherwise emit `NOT(a)`. |
 | `ASSERT(a,b,c)` | always emitted; no wire. |
 
-Operands are recorded in the order of the call. Only constant wires are folded,
-so **the instruction list depends only on the kinds of wires, never on public
+Operands are recorded in the order of the call. Only the wire ids 0 and 1 are
+folded; a call on PUB wires is emitted, although its value is public. So **the
+instruction list depends only on the kinds of wires, never on public
 values**; the witness layout and proof length are fixed per statement id.
 
 - An emitted AND whose two inputs are SEC ("MUL") is the only non-linear gate:
@@ -459,9 +460,31 @@ All constraints have degree 2 (the E1 encoding of R1).
 
 ### 7.4 SHA-256 gadgets
 
-A word is a list of 32 wires, least significant bit first. Word gadgets emit
-their instructions bit by bit in ascending bit order; nested calls evaluate
-their arguments left to right.
+A word is a list of 32 wires, least significant bit first. `const_word`,
+`rotr` and `shr` only select wires and emit nothing.
+
+**Emission order.** Read the pseudo-code below as a sequential program; the
+builder emits instructions in the order in which it makes the builder calls
+of §7.2:
+
+1. Statements and loops run in the order written, each loop over its range
+   in ascending order.
+2. A gadget defined per bit (`[i] = …`) is a loop over `i` from 0 to 31.
+3. The arguments of a call are evaluated left to right, each completely,
+   before the call itself.
+
+A call that folds (§7.2) emits nothing. For example:
+
+- The inner `xor_w` of `Σ0` emits all 32 XORs before the outer `xor_w`
+  emits any.
+- `Ch` makes the calls `XOR(f[i],g[i])`, `AND` and the outer `XOR` of bit
+  `i` before any call of bit `i+1`.
+- `add` makes, for bit `i`, the two XOR calls of `s[i]` and then the four
+  calls of the next carry.
+- `assert_add` makes the calls of all 32 `c[i]`, then `ASSERT(c[0], 1, 0)`,
+  then three XOR calls and one ASSERT per bit.
+- `compress` emits the whole message schedule before round 0, and within
+  `W[t]` all of `σ1(W[t−2])` before `σ0(W[t−15])`.
 
 ```
 const_word(v)[i] = wire (v >> i) & 1
@@ -488,7 +511,10 @@ add(x, y):                      # ripple carry, one AND per carry bit
 add_multi(words):
     order the words stably: those with no SEC wire first, then those with a SEC wire;
     drop words whose 32 wires are all constant 0;
-    if none remain, return const_word(0); otherwise fold left with add.
+    if none remain, return const_word(0)
+    acc = the first remaining word                 # one word: returned, nothing emitted
+    for each further remaining word v, in order: acc = add(acc, v)
+    return acc
 
 assert_add(x, y, z):            # x + y = z (mod 2^32), z without SEC wires
     for i in 0..31: c[i] = XOR(XOR(x[i], y[i]), z[i])
@@ -503,7 +529,7 @@ uses the implied carries `c_i = x_i ⊕ y_i ⊕ z_i` and costs no witness bits
 (§7.7).
 
 ```
-compress(H, W, S = none):       # H: 8 words, W: 16 words, S: optional 8 non-SEC words
+compress(H, W, F = none):       # H: 8 words, W: 16 words, F: optional 8 non-SEC words
     for t in 16..63:
         W[t] = add_multi([σ1(W[t-2]), W[t-7], σ0(W[t-15]), W[t-16]])
     (a,b,c,d,e,f,g,h) = H
@@ -512,25 +538,28 @@ compress(H, W, S = none):       # H: 8 words, W: 16 words, S: optional 8 non-SEC
         T1 = add_multi([h, s1, ch, const_word(K_t), W[t]])
         s0 = Σ0(a);  mj = Maj(a,b,c)
         T2 = add_multi([s0, mj])
-        if S given and t ≥ 60:
-            e' = S[4 + 63 − t];  a' = S[63 − t]
+        if F given and t ≥ 60:
+            e' = F[4 + 63 − t];  a' = F[63 − t]
             assert_add(d, T1, e');  assert_add(T1, T2, a')
         else:
             e' = add_multi([d, T1]);  a' = add_multi([T1, T2])
         (h,g,f,e,d,c,b,a) = (g,f,e,e',c,b,a,a')
-    if S given: return nothing
+    if F given: return nothing
     return [add_multi([H[w], state[w]]) for w in 0..7]      # state = (a,b,c,d,e,f,g,h)
 ```
 
-`K_t` are the FIPS 180-4 round constants. With `S` given, the circuit asserts
+`K_t` are the FIPS 180-4 round constants. With `F` given, the circuit asserts
 that the state after round 63, `(a_64, a_63, a_62, a_61, e_64, e_63, e_62, e_61)`,
-equals `S`; from round 60 on, the asserted (public) words replace the computed
-ones, and Ch/Maj/Σ on public words fold away.
+equals `F`. From round 60 on, the asserted (public) words replace the computed
+ones. `Σ0`, `Σ1`, `Ch` and `Maj` on public words then cost no MULs, but their
+PUB instructions are emitted (§7.2).
 
-**Standalone compression circuit** (for testing the generator): 768 secret
-inputs (chaining value words 0–7, then block words 0–15, bit `i` of word `j` at
-input `32j + i`, big-endian words), `compress(H, W)`, and 256 outputs: bit `i` of
-output word `w` is output `32w + i`. Counts:
+**Standalone compression circuit** (for testing the generator): `P = 0`,
+`S = 768`. Secret input `32j + i` (wire `2 + 32j + i`) is bit `i` of word `j`;
+words 0–7 are the chaining value `H` and words 8–23 the block `W`. The circuit
+is `compress(H, W)`, with 256 outputs: output `32w + i` is bit `i` of output
+word `w`. A test that compares with native SHA-256 takes block word `j` as the
+big-endian word of block bytes `[4j, 4j+4)` (FIPS 180-4). Counts:
 **22,573 AND**, 111,607 XOR, 1,891 NOT. The AND count equals the Bristol Fashion
 SHA-256 count that R1 verified.
 
@@ -567,7 +596,7 @@ inner   = [X_0..X_7, W8, const_word(0) ×6, const_word(776)]
           W8[i] = constant 0 for i < 23, constant 1 for i = 23, suffix bit (i−24) for i ≥ 24
 D       = compress(IV_in, inner)                               # inner digest, 8 SEC words
 outer   = [D_0..D_7, const_word(0x80000000), const_word(0) ×6, const_word(768)]
-compress(IV_out, outer, S = T)
+compress(IV_out, outer, F = T)
 ```
 
 The inner block is `x ‖ suffix ‖ 0x80 ‖ 0^22 ‖ be64(776)` and the outer block
@@ -596,11 +625,20 @@ values never change the instruction list (§7.2).
 ### 7.6 Canonical serialization and digest
 
 ```
-"VOLEitH-rescue circuit v0.1" ‖ 0x00 ‖ u32le(P) ‖ u32le(S) ‖ u32le(#instructions)
-  ‖ for each instruction: opcode ‖ operands, each u32le
-        (XOR = 0x01 a b; AND = 0x02 a b, including MULs; NOT = 0x03 a; ASSERT = 0x04 a b c)
-  ‖ u32le(#outputs) ‖ outputs, each u32le
+circuit = label ‖ u32le(P) ‖ u32le(S) ‖ u32le(n) ‖ instr_1 ‖ … ‖ instr_n
+          ‖ u32le(n') ‖ u32le(o_1) ‖ … ‖ u32le(o_n')
+label   = ASCII "VOLEitH-rescue circuit v0.1" ‖ 0x00        (28 bytes, no length prefix)
+instr   = 0x01 ‖ u32le(a) ‖ u32le(b)                         XOR(a,b)       9 bytes
+        | 0x02 ‖ u32le(a) ‖ u32le(b)                         AND(a,b)       9 bytes
+        | 0x03 ‖ u32le(a)                                    NOT(a)         5 bytes
+        | 0x04 ‖ u32le(a) ‖ u32le(b) ‖ u32le(c)              ASSERT(a,b,c) 13 bytes
 ```
+
+- The opcode is one byte; each operand is a wire id in `u32le`.
+- The instructions are the emitted ones, in emission order (§7.4), with
+  operands in call order (§7.2). `n` counts them, ASSERTs included.
+- A MUL is serialized as AND (`0x02`); kinds are not serialized.
+- `o_1 … o_n'` are the output wire ids. A statement circuit has `n' = 0`.
 
 SHA-256 of this byte string:
 
@@ -612,7 +650,29 @@ SHA-256 of this byte string:
 The label "circuit v0.1" is the version of the circuit layer, which v0.2 does
 not change (§16).
 
-An independent implementation that follows §7.2–§7.5 reproduces these digests.
+An independent builder written from §7.2–§7.5 reproduced both digests and
+every gate count (the clean-room verifier, §16).
+
+**Per-gadget circuits.** `vectors/gadgets-v0.2.json` lists 20 small circuits
+built from the gadgets of §7.4, so that a digest mismatch can be traced to
+one gadget. Each entry gives `P`, `S`, the construction, the gate counts,
+the serialization length and its SHA-256; entries of at most 2,048 bytes also
+give the serialization in hex. Public word `Pj` is public inputs
+`[32j, 32j+32)` and secret word `Sj` is secret inputs `[32j, 32j+32)`. The
+outputs are the returned word's 32 wires, unless the entry says otherwise.
+The circuits cover:
+
+- `add` on SEC+SEC, SEC+PUB, PUB+SEC and SEC+constant;
+- `add_multi` with SEC, PUB, zero and other constant words;
+- `xor_w` with a constant (NOTs);
+- `Ch` and `Maj` on SEC words, on mixed SEC and PUB words, and `Maj` with
+  both forms in one word;
+- `Σ0`, `Σ1`, `σ0`, `σ1` on a SEC word, and `Σ0` on a PUB word;
+- `assert_add` with SEC+SEC=PUB and SEC+PUB=PUB;
+- one full `compress` with a SEC chaining value and a PUB block.
+
+`python/tools/gen_gadget_vectors.py` writes the file. The Python and Rust
+tests rebuild every entry.
 
 ### 7.7 Encoding soundness
 
