@@ -6,7 +6,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 SEED=${1:-20261015}
 WORK=$HERE/work
-GO_SRC=/tmp/xc-go
+GO_SRC=$WORK/go-src
 mkdir -p "$WORK"
 
 # 1. Cases and tests (y from Python's hmac module).
@@ -22,12 +22,10 @@ BIN=$HERE/target/release/voleith-crosscheck
 python3 -I "$HERE/verify_py.py" "$ROOT/python" "$WORK/cases.tsv" "$WORK/proofs.txt" \
   "$WORK/tests.tsv" "$WORK/verdicts-python.tsv" 4
 
-# 4. The clean-room Go verifier, exported (not merged) from its branch.
-if [ ! -d "$GO_SRC/go" ]; then
-  mkdir -p "$GO_SRC"
-  git -C "$ROOT" archive origin/cleanroom/go-verifier go | tar -x -C "$GO_SRC"
-fi
+# 4. The clean-room Go verifier in go/, copied to a scratch module so that
+#    the driver does not add files to go/.
 mkdir -p "$GO_SRC/go/cmd/xcverify"
+cp -R "$ROOT/go/." "$GO_SRC/go/"
 cp "$HERE/go/main.go" "$GO_SRC/go/cmd/xcverify/main.go"
 (cd "$GO_SRC/go" && go build -o "$WORK/xcverify" ./cmd/xcverify)
 "$WORK/xcverify" "$WORK/cases.tsv" "$WORK/proofs.txt" "$WORK/tests.tsv" "$WORK/verdicts-go.tsv"

@@ -72,10 +72,11 @@ The script runs these stages:
    - `src/main.rs verify`, the Rust verifier (PCLMULQDQ path);
    - `verify_py.py`, the Python reference `python/voleith`, with 4 worker
      processes;
-   - `go/main.go`, the clean-room Go verifier. Its `go/` directory is
-     exported with `git archive origin/cleanroom/go-verifier go` into
-     `/tmp/xc-go` (not merged), and the driver is copied in as
-     `cmd/xcverify`.
+   - `go/main.go`, the clean-room Go verifier. For this run its `go/`
+     directory was exported with `git archive origin/cleanroom/go-verifier go`
+     into `/tmp/xc-go` (not merged), and the driver was copied in as
+     `cmd/xcverify`. Since the integration, `go/` is in the tree and
+     `run.sh` copies it to `crosscheck/work/go-src/` instead.
 4. **`compare.py`** expects acceptance for the valid proofs and rejection
    for every other test, with the same verdict from all three. It writes
    any mismatch to `crosscheck/findings/`.
@@ -122,10 +123,11 @@ There are 8 tests per case (800 in total):
 
 ## 4. Fuzzing the new verifier
 
-The harness is `rust/fuzz/` of branch `fuzz` (the 2026-10-15 fuzzing work), copied to
-`crosscheck/fuzz/`.
+The harness is `rust/fuzz/` (the 2026-10-15 fuzzing work). For this run it
+was copied from branch `fuzz` to `crosscheck/fuzz/`; since the integration
+that copy is gone and `rust/fuzz/` is the only one.
 
-- The only change is the dependency `voleith = { path = "../../rust" }`.
+- The copy's only change was the dependency `voleith = { path = "../../rust" }`.
   `Cargo.lock` also picked up `zeroize 1.8.2` from this branch.
 - The known-valid oracle loads `vectors/` (4 KATs and 100 differential
   proofs).
@@ -134,7 +136,7 @@ Every target therefore calls this branch's verifier, which uses the
 PCLMULQDQ `gf128::mul` on this CPU (`ffi` goes through the C ABI).
 
 ```
-cd crosscheck
+cd rust
 cargo +nightly fuzz build -O -a -s none verify_raw
 cargo +nightly fuzz build -O -a -s none verify_mutate
 cargo +nightly fuzz build -O -a -s address --target-dir fuzz/target-asan ffi
@@ -236,12 +238,14 @@ I found no defect. Specific points:
 
 - **Committed:**
   - `crosscheck/{Cargo.toml,Cargo.lock,src/main.rs,gen.py,verify_py.py,compare.py,run.sh,go/main.go}`;
-  - `crosscheck/fuzz/` (the t1 harness, rebased onto this crate);
+  - `crosscheck/fuzz/` (the t1 harness, rebased onto this crate; removed
+    at the integration in favour of `rust/fuzz/`);
   - this report.
 - **Not committed (ignored):**
   - `crosscheck/work/` (cases, 26 MB of proofs, verdicts);
   - `crosscheck/target/`;
-  - `crosscheck/fuzz/{target,target-asan,corpus,artifacts,logs,slow}`.
+  - `crosscheck/fuzz/{target,target-asan,corpus,artifacts,logs,slow}`
+    (now `rust/fuzz/`, whose `.gitignore` covers them).
 - **Scratch copies under `/tmp`:**
   - `/tmp/portable` (the forced-portable crate);
   - `/tmp/xc-go` (the Go verifier export);

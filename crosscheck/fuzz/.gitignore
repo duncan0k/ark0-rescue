@@ -1,7 +1,0 @@
-target/
-corpus/
-artifacts/
-coverage/
-logs/
-slow/
-target-asan/

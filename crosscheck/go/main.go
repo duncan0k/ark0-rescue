@@ -1,6 +1,6 @@
-// Go-verifier driver for the cross-check. It is copied into the cleanroom Go
-// module (branch cleanroom/go-verifier, directory go/) at cmd/xcverify by
-// run.sh and run there:
+// Go-verifier driver for the cross-check. It is copied into a scratch copy of
+// the clean-room Go module (directory go/) at cmd/xcverify by run.sh and run
+// there:
 //
 //	go run ./cmd/xcverify <cases.tsv> <proofs.txt> <tests.tsv> <verdicts.tsv>
 //
