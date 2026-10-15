@@ -102,8 +102,11 @@ code less independently than the internal review's re-implementation did.
   verifier under `catch_unwind` (release builds keep `panic = "unwind"`).
 - **Arithmetic.** GF(2^128) products use PCLMULQDQ when the CPU has it
   (run-time detection), otherwise a portable bit-serial constant-time multiply
-  in the prover and, for the verifier's public data only, a 4-bit-window
-  multiply and 64 KiB tables for fixed multipliers. No AES instruction is
+  in the prover and in the verifier's `ZkHash::finish`, and, for the rest of
+  the verifier's public data, a 4-bit-window multiply and 64 KiB tables for
+  fixed multipliers. Without PCLMULQDQ the verifier is not exactly as fast as
+  before the constant-time work: median 26.7 ms against 26.1 ms for the
+  table-only base and 22.8 ms with PCLMULQDQ (`rust/CT-AUDIT.md` §5). No AES instruction is
   used.
 - **Dependencies.** Runtime: `sha3 =0.10.9` (RustCrypto, for SHAKE256), which
   brings `digest 0.10.7`, `block-buffer 0.10.4`, `crypto-common 0.1.7`,

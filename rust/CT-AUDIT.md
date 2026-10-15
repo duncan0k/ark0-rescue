@@ -46,7 +46,10 @@ it there (−12% verify time, §5). On CPUs without a carry-less instruction the
 portable constant-time multiply is about 4× slower than the tables. Measured
 with everything forced portable: prove 124.5 ms, verify 106.2 ms (median of
 21), against 28/24 ms. So the verifier keeps its table fallback only there.
-Its inputs are public. aarch64 PMULL is not implemented: an aarch64 prover
+Its inputs are public. It does not run exactly as before there, though:
+`ZkHash::finish` now uses the portable constant-time multiply (two products
+per call), and the zeroization of shared types (SHA-256, Keccak, GGM expansion,
+VOLE scratch) adds work. Measured in that configuration in §5. aarch64 PMULL is not implemented: an aarch64 prover
 uses the portable path, an aarch64 verifier the tables. The crate checks
 clean for aarch64 and i686.
 
@@ -248,8 +251,32 @@ Both binaries produce the same proof (130,218 bytes, sha256
 `ad6beb9321612f18b3fd7164910be60692bab88c21c636aa42e346d729c7ef00`).
 The cost of zeroization and the 64 KiB stack scrub was not measured
 separately. The "after" numbers include it, and the CLMUL speedup more than
-covers it. On a CPU without PCLMULQDQ the prover would
-be about 4× slower (§1). The verifier would run as before.
+covers it.
+
+**Without PCLMULQDQ.** Measured on 2026-10-15 in the real configuration of a
+CPU without PCLMULQDQ: a scratch copy (not committed) with
+`clmul::available()` forced to false, so that `has_clmul()` is false and
+`gf128::mul` takes `mul_portable`. The verifier then uses its tables
+everywhere except `ZkHash::finish`, which uses the portable constant-time
+multiply. Same bench, `--runs 31`, `taskset -c 1`, on an Intel Xeon @
+2.10 GHz VM that was noisier than the one above; eight alternating rounds
+of the three binaries, the pre-change base being `b32453d` (the bench
+commit), which uses tables everywhere:
+
+| median of 31 runs, per round (ms) | median of the 8 rounds |
+|---|---|
+| verify, PCLMULQDQ (this branch): 23.42 / 21.58 / 21.67 / 25.43 / 22.18 / 21.46 / 23.73 / 27.67 | **22.8 ms** |
+| verify, no PCLMULQDQ (this branch): 25.14 / 25.38 / 29.87 / 31.53 / 26.32 / 27.08 / 33.70 / 25.82 | **26.7 ms** |
+| verify, base `b32453d` (tables): 25.96 / 26.44 / 25.92 / 27.14 / 29.13 / 26.02 / 26.04 / 26.09 | **26.1 ms** |
+| prove, no PCLMULQDQ (this branch), rounds 1–3 and 6–8 | 100.1 / 102.0 / 121.9 / 109.9 / 132.5 / 105.7 ms |
+
+All three binaries produced the same proof (sha256 `ad6beb93…ef00`).
+Without PCLMULQDQ the verifier is therefore not unchanged: its median is
+about 2% above the table-only base (26.7 against 26.1 ms) and 17% above the
+PCLMULQDQ verifier, with a much wider spread between rounds (25.1–33.7 ms
+against 25.9–29.1 ms). The 2% is within this VM's round-to-round noise, so
+the cost of the portable `ZkHash::finish` and of zeroization is small but
+was not resolved more precisely. The prover is about 4× slower there (§1).
 
 ## 6. Tests
 
