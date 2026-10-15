@@ -547,14 +547,18 @@ none overlapped minutes x4 or x5 or another workload's six-hourly job
 
 ## 2026-10-15 work branches
 
-Three tasks ran in cloud sessions on 2026-10-15, each on its own branch.
-Nothing from them is in `main` yet.
+Six cloud sessions on 2026-10-15 produced five branches. Their commits
+were replayed under this repository's identity, with the same trees.
+Nothing from them is in `main` yet. One integration run will merge them,
+then rerun every test.
 
 | Branch | What | State |
 |---|---|---|
 | `cleanroom/go-verifier` | An independent verifier in Go, written from SPEC.md and the vectors only. Its base, `cleanroom/base`, holds nothing else. | done |
-| `ct-prover` | Finding F7: constant-time GF(2^128) arithmetic in the Rust prover, zeroization and a dudect-style timing test (`rust/CT-AUDIT.md`). | done, not yet reviewed |
-| (fuzzing) | cargo-fuzz targets for `verify`, for structured mutations of the valid proofs and for the C ABI. | running |
+| `ct-prover` | Finding F7: constant-time GF(2^128) arithmetic in the Rust prover, zeroization and a dudect-style timing test (`rust/CT-AUDIT.md`). | done; three review rounds, the last SHIP |
+| `crosscheck` | An independent check of `ct-prover`: rerun, the portable path, three implementations on 800 cases, 60 minutes of fuzzing the new verifier. | done, no finding |
+| `spec-rev2` | SPEC.md v0.2 revision 2: wording only, resolves the 18 spec issues, adds per-gadget circuit digests. | done, reviewed |
+| `fuzz` | cargo-fuzz targets for `verify`, for structured mutations of the valid proofs and for the C ABI. | running |
 
 ### Clean-room Go verifier
 
@@ -596,42 +600,86 @@ Nothing from them is in `main` yet.
 
 ### Constant-time prover
 
-What the branch changes (9 commits on `580fabe`):
+What the branch changes (19 commits on `580fabe`, the review fixes
+included):
 
 - **Multiplication.** GF(2^128) products use PCLMULQDQ, detected at run
   time, and otherwise a bit-serial masked multiply.
 - **Hashes.** The prover's universal hashes take a constant-time key
-  multiplier, and the type system keeps the 64 KiB tables out of the
-  prover.
+  multiplier. The prover names it explicitly; the type system does not
+  enforce this (review finding F3), the review of the call paths does.
 - **Branches.** Two branches on secret data are gone: the ASSERT check in
   circuit evaluation and the early-exit HMAC comparison.
 - **Zeroization.** `zeroize =1.8.2` plus sha3's `zeroize` feature, and a
-  64 KiB stack scrub after `prove`.
+  64 KiB stack scrub after every prover entry point, on success and on
+  error. `prove_impl` is never inlined, so its frames lie below the scrub.
 
 Results and status:
 
-- **Tests (as reported by the session, not yet rerun here).** Every proof
-  is byte-identical. 31 tests pass in release and dev, and clippy and fmt
-  are clean. `python/`, `vectors/` and SPEC.md are untouched (checked here
-  by diff).
+- **Tests.** Every proof is byte-identical. 34 tests pass in release and
+  dev, and clippy and fmt are clean. `python/`, `vectors/` and SPEC.md are
+  untouched (checked here by diff). Branch `crosscheck` reran all of this
+  independently (below).
 - **Speed.** On PCLMULQDQ hardware the verifier uses the same constant-time
   multiply. Verify went from 27.3 to 24.1 ms (−11.7%) and prove from 29.9 to
   28.0 ms (−6.4%): medians of 3 × 31 alternating runs on a 2.8 GHz Xeon VM.
-  Without PCLMULQDQ the prover takes about 125 ms, and the verifier keeps its
-  tables.
-- **Timing tests.** The leaky control and the old tables show |t| > 1,200,
-  while both constant-time multiplies stay below 2.4 at n = 200,000. The
-  prove()-level test cannot tell the old prover from the new one, so it is a
-  smoke test only. False alarms from an earlier harness version are recorded
-  in `rust/CT-AUDIT.md`.
+  Without PCLMULQDQ the prover takes about 125 ms. The verifier then keeps
+  its tables, except for the two products in `ZkHash::finish`, and verifies
+  in 26.7 ms against 26.1 ms for the old table-only code.
+- **Timing tests.** In every run the leaky control (|t| 820–1,923) and the
+  old tables (323–1,303) are flagged. Both constant-time multiplies stay at
+  |t| ≤ 2.77 at n = 200,000. The prove()-level test cannot tell the old
+  prover from the new one, so it is a smoke test only. False alarms from an
+  earlier harness version are recorded in `rust/CT-AUDIT.md`.
 - **Known gaps.**
   - The `digest 0.10` block buffer and the XOF output buffer cannot be
     zeroized; only the stack scrub covers them.
   - Registers.
   - The caller's `witness` and `rho`.
   - No aarch64 PMULL path: the portable path is used there.
-- **Before merging.** Rerun the tests and vectors outside the session that
-  wrote the code, and review the diff.
+- **Reviews.** Three rounds of gpt-6.1-sol max on the diff.
+  - Round 1: NOT-YET. The bench entry point skipped the stack scrub
+    (Medium), the Welch test passed a fully distinguishable sample (Low),
+    plus a wording claim and the bench running under `--all-targets`.
+  - Round 2: NOT-YET. Its Welch fix let an undecidable crop hide a
+    detected leak, so the positive control could fail (Low). Two doc
+    leftovers.
+  - Round 3: SHIP.
+  The original texts are archived outside this repository.
+
+### Cross-check (branch `crosscheck`)
+
+Another session reran the work on `ct-prover` before the review fixes, and
+found nothing:
+
+- **Rerun.** 31 tests pass in release and dev, clippy and fmt are clean.
+- **Portable path.** With PCLMULQDQ switched off in a scratch copy, all
+  tests pass and every proof is byte-identical.
+- **Three implementations.** 100 new statements and proofs (messages of 0,
+  1, 96, random and 65,535 bytes), each with 5 single-bit proof flips over
+  all §10 fields, one message change and one statement change: 800 cases.
+  The Rust, Python and Go verifiers agree on every case, accept every
+  valid proof and reject every change.
+- **Fuzzing the new verifier.** 60 minutes on 4 cores, 971,534 executions:
+  no crash, no timeout, no AddressSanitizer report, no accepted modified
+  proof. 33 inputs were flagged slow under load (2.0–2.4 times a valid
+  verify) but ran at normal speed when replayed on an idle machine.
+
+### SPEC revision 2 (branch `spec-rev2`)
+
+Reviewed here against `python/voleith`:
+
+- The two statement vector files are byte-identical, and only SPEC.md,
+  NOTES.md and the new gadget tool, vectors and tests changed.
+- The new statements match the reference: hash outputs are truncated without
+  a padding check; the two Horner forms of VH and ZKH; the bit order of `Δ`;
+  the emission order of `add` and `assert_add`; the public bits are computed
+  only after step 6.
+- One sentence was tightened here: steps 1–5 may run in any order, and
+  step 6 needs the length that step 4 checked.
+- Integration issue: `rust/tests/gadget_vectors.rs` includes `src/gf128.rs`
+  and `src/circuit.rs` with `#[path]`. On `ct-prover`, gf128.rs also needs
+  `clmul.rs`, so the merge has to adjust that test.
 
 ### Fuzzing
 
