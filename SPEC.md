@@ -845,7 +845,8 @@ PRG, field or circuit work happens before all of steps 1–6 have passed. That
 includes the native SHA-256 compressions of `K` and the subtraction that form
 the public bits (§7.5). Step 10 lists them; an implementation may compute them
 at any point after step 6.
-The order of steps 1–6 does not change the verdict.
+Steps 1–5 may run in any order without changing the verdict; step 6 needs
+the length that step 4 checked.
 
 Every conforming verifier gives the expected verdict on every case of the two
 proof vector files (Appendix A).

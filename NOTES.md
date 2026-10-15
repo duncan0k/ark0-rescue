@@ -594,7 +594,7 @@ Nothing from them is in `main` yet.
 | 17 | Low | §11 | SPEC does not describe the differential file or its edit language. |
 | 18 | Low | §1, §11, §14 | SPEC defers to code and to NOTES.md, which an independent implementer may not have. |
 
-SPEC.md v0.2 revision 2 (branch `cloud/t5-spec-rev2`) resolves all 18 issues in wording only; SPEC §16 lists where, and `vectors/gadgets-v0.2.json` adds per-gadget circuit digests (§7.6).
+SPEC.md v0.2 revision 2 (branch `spec-rev2`) resolves all 18 issues in wording only; SPEC §16 lists where, and `vectors/gadgets-v0.2.json` adds per-gadget circuit digests (§7.6).
 
 ### Constant-time prover
 
