@@ -2,8 +2,10 @@
 
 Companion to `SPEC.md`: measurements, what is missing, and questions for
 reviewers. v0.2 replaced v0.1 on the same day: 24 GGM trees of mixed depth
-instead of 16 trees of depth 8 (section "v0.2 tree split"). Sections and
-numbers marked "v0.1, superseded" are kept for the record only.
+instead of 16 trees of depth 8 (section "v0.2 tree split"). Two internal
+reviews followed; their findings and SPEC v0.2 revision 1 are in section
+"2026-10-14 internal reviews". Sections and numbers marked "v0.1,
+superseded" are kept for the record only.
 
 ## Python measurements (v0.1, superseded)
 
@@ -402,6 +404,118 @@ version byte `0x02`, proofs of 130,218 bytes.
   the Rust prover reproduces all 104 proofs byte for byte.
 - The v0.1 vector files are removed; git history keeps them.
 
+## 2026-10-14 internal reviews
+
+Two AI models reviewed v0.2 at commit `0623179`. Neither is an external
+cryptographer, and no external review has been done; the owner may arrange
+one. Their full texts (in Chinese) are kept outside this repository.
+
+| Reviewer | Verdict | In short |
+|---|---|---|
+| gpt-6-astra, effort xhigh | REVISE | Off-chain demos with test seeds may go on; before the consensus design, add the rescue-lane preconditions and fix the findings below. No reproducible forgery and no malleability of the proof encoding. It reran the 72 Python tests and read the Rust code without compiling it. |
+| Fable 5.1, effort max | PROCEED | No construction defect that needs a new version byte. §13 has the right structure but gaps in its bookkeeping, and three properties of the rescue lane must become consensus rules. Close its High and Medium items before freezing v0.2 or activating it on signet. |
+
+Revision 1 answers both without a protocol change: the version byte stays
+`0x02`, every proof is the same, and both vector files regenerate byte for
+byte from the revised Python code (SHA-256 `e4ae3f6d…` and `9ec6ff5f…`).
+
+### Findings and dispositions
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| astra: publishing `y = d` exposes the old Schnorr key on every other output, network or spend path of that key; the network id does not protect those | High (conditional) | SPEC §12.1 item 4 and §13.1. To be enforced and tested in the M4-R design; not verifiable in this repository. |
+| Fable F1: three preconditions the proof cannot provide: `y` fixed by the spent output, a SIGHASH_ALL-type rescue sighash, and `y = d` burning the key | High | SPEC §12.1 items 1, 2 and 4, with item 3 (`m` exactly 96 bytes), mirrored in §13.1. |
+| astra: `prove()` returned a `ProverTrace` holding `r` and the tree roots, with `Debug`; the reviewer recovered `x` from `r` and a vector proof | Medium | Fixed. `prove()` returns the proof only. `prove_traced()` exists only with the cargo feature `test-trace`, which only the tests enable, through a dev-dependency of the crate on itself; a plain library build has no features (checked in the rustc command line). `ProverTrace` has no `Debug`, `Clone` or `PartialEq`. Python's `prove()` already returned the proof only. |
+| Fable F2: the "honest keys" assumption was misplaced; one-wayness and seed entropy unclear | Medium | SPEC §13.1. |
+| Fable F3: §13.2 bookkeeping: no `Q_{2,3}·2^−128` term, an underived factor 3, partial guessing of `Δ` only asserted, the source of `C(τ,2)`, §13.6 on 128-bit outputs | Medium | SPEC §13.2 (new term, factor dropped, lemma sketch) and §13.6. The source of `C(τ,2)` is still to be checked. |
+| Fable F4: strong unforgeability argued only informally | Medium | SPEC §13.4: lemma sketch; the owner can always change the `wtxid`. |
+| Fable F5: the threat model is quantum, the claims are classical | Medium | SPEC §13.5 and §13.6. The risk decision itself belongs to the consensus design. |
+| Fable F6 and astra: verification work depends on `Δ` (up to 1,324,702 bytes of XOR for `chall3 = ff…ff`), every well-formed proof costs a full verification, and the weight was calibrated on one machine | Medium (F6), Low | SPEC §11 and §12.1; measured below. Other hardware not measured; per-block or per-peer limits are M4-R policy. |
+| Fable F7 and astra: both provers leak through cache timing and do not zeroize; the zero-knowledge wording was too strong; §14 named only the Python prover | Medium (deployment gate), Low | SPEC §13.3 and §14 item 2: zero knowledge stated conditionally, both provers test-only, demos with test seeds only. |
+| astra: a cold `verify()` built the circuit before rejecting a malformed input (Python: 163 ms for an empty proof) | Low | Fixed in both languages: layouts from fixed sizes, the circuit only after step 6. Python, cold, empty proof: 157–159 ms before, 0.02 ms after. Tests: `rust/tests/cold_reject.rs`, `test_format_checks_do_not_build_the_circuit`. |
+| astra: `voleith.h` still said 87,506 bytes and v0.1 | Low | Fixed: 130,218 bytes, v0.2, and that §12.1 is the caller's. |
+| Fable F8: the second VOLEHash key is load-bearing | Low | SPEC §5.4. |
+| Fable F9: tests should tamper with single QuickSilver terms, not only witness bits | Low | New tests: on the small gadget circuit, every `A0_t` and `A1_t`, in Python and Rust; end to end in Python, both terms of the first, a middle and the last constraint of statement 0x01. |
+| Fable F10: stale `v0.1` in `sym.rs`; `verify_impl` parsed every statement as 0x01; no byte-order known answer | Low | Fixed: the comment; Rust parses public inputs by statement id, so an id without rules fails closed; a known answer in both languages (`X^127 · X` gives byte 0 = `0x87` and zeros, as SPEC §1.3 says). |
+| Fable F11: say why `Δ = 0` is valid | Low | SPEC §11. |
+| Fable F12: `rnd` hashes the seed directly | Low | No change; SPEC §15. |
+| Fable F13: SHAKE128 or grinding would cut more work than `τ` | Low | No change (each needs a version bump); SPEC §15. |
+
+On the open questions below, the reviews add: GF(2^128) blocks keep
+VOLEHash GF(2)-linear and the full-width `t` is fine, but extraction and the
+full CMA reduction still need a written argument (Q1–2); anti-replay, strong
+unforgeability and simulation extractability must be defined separately in
+the consensus design, with QROM as a conjecture (Q3–4); keep `τ = 24`, and
+look at the corrections (94% of the proof) for size (Q5, Q7); the
+`assert_add` argument holds (Q6); the ASCII restriction on `K` may stay, the
+rescue layer should fix the wallet label and index encoding, and the empty
+suffix needs its own statement id (Q8); a derived `rnd` key is not needed,
+but several statements on one seed need a joint one-wayness assumption
+(Q9–10); the library may keep 65,535 bytes if the rescue adapter requires 96
+(Q11).
+
+For the external review, Fable names three places: §5.4 with §13.2 (the
+VOLEHash replacement and the SoftSpoken argument over 24 mixed-depth trees,
+with the sub-cube lemma); §8 with §13.2 and §13.4 (transcript binding,
+straight-line extraction, the `Q_{2,3}` term, strong unforgeability); and
+§13.1, §13.5 and §13.6 (whether conjectured QROM security, Grover at category
+1, a 256-bit one-way function and the seed-entropy precondition make an
+acceptable, recorded decision). It suggests formal or exhaustive tools rather
+than reading for §7.7.
+
+### Benchmarks after revision 1
+
+The pod, image and procedure of "v0.2 tree split" (generic x86-64 release
+build, one thread), `τ = 24` only, `cargo bench --locked --features
+bench-splits --bench verify -- --taus 24 --runs 1000 --schnorr 20000`. Each run
+interleaves four inputs, 1,000 verifications each, with 20,000 libsecp256k1
+BIP-340 verifications in the same binary: the valid proof with a 96-byte
+message; the same proof with `chall3 = ff…ff` (well-formed, so verified in
+full, with every bit of `Δ` set: the most conditional XOR); a valid proof
+over a 65,535-byte message; and that proof with `chall3 = ff…ff`. Three runs;
+none overlapped minutes x4 or x5 or another workload's six-hourly job
+(04:07–04:09). Load average 1.7–2.7.
+
+| Run (UTC) | Input | Median | p99 | C | Budget / C |
+|---|---|---|---|---|---|
+| 03:56 | valid, 96-byte message | 32.61 ms | 48.73 ms | 76,607 | 1.70 |
+| 03:56 | `chall3 = ff…ff` | 32.81 ms | 47.99 ms | 75,449 | 1.73 |
+| 03:56 | valid, 65,535-byte message | 32.93 ms | 49.10 ms | 77,189 | 1.69 |
+| 03:56 | 65,535-byte message, `chall3 = ff…ff` | 33.01 ms | 48.84 ms | 76,789 | 1.70 |
+| 03:58 | valid, 96-byte message | 33.57 ms | 53.11 ms | 82,106 | 1.59 |
+| 03:58 | `chall3 = ff…ff` | 33.80 ms | 51.53 ms | 79,660 | 1.64 |
+| 03:58 | valid, 65,535-byte message | 33.76 ms | 51.46 ms | 79,559 | 1.64 |
+| 03:58 | 65,535-byte message, `chall3 = ff…ff` | 34.44 ms | 53.64 ms | 82,932 | 1.57 |
+| 04:16 | valid, 96-byte message | 32.98 ms | 49.08 ms | 77,222 | 1.69 |
+| 04:16 | `chall3 = ff…ff` | 32.82 ms | 48.04 ms | 75,577 | 1.72 |
+| 04:16 | valid, 65,535-byte message | 32.94 ms | 50.73 ms | 79,816 | 1.63 |
+| 04:16 | 65,535-byte message, `chall3 = ff…ff` | 33.01 ms | 47.62 ms | 74,912 | 1.74 |
+
+- `C = 1.25 × 50 × p99 / median(Schnorr)`, budget 130,268 (proof bytes + 50).
+  Schnorr medians: 39.76, 40.43 and 39.73 µs.
+- Every input meets the v0.2 rule (`C ≤ budget / 1.5`) in every run; the
+  lowest margin is 1.57. In each run the medians of the other three inputs
+  are within −0.16 to +0.87 ms of the valid proof's: the extra XOR (at most
+  1.3 MB) and hashing a 65,535-byte message into `μ` are lost in the noise.
+- Rejections at the final comparison (ã or chall3 flipped, 100 each):
+  medians 32.5–33.4 ms, p99 45.5–46.4 ms. Rust prover: 39–44 ms. SHAKE256:
+  226–249 MB/s. The tree-split runs measured valid-proof medians of
+  33.9–37.9 ms.
+
+### Tests after revision 1
+
+- Python: 76 tests pass (72 before). New: malformed inputs leave the
+  circuit unbuilt; the GF(2^128) byte-order known answer; QuickSilver term
+  tampering on the small circuit and end to end.
+- Rust: 31 tests pass (27 before): 21 unit, 1 in `tests/cold_reject.rs`, 7
+  vector and 2 differential tests. `cargo fmt --check` is clean, and clippy
+  with `-D warnings` is clean for the library alone, for all targets and for
+  all targets with `bench-splits`; each commit was checked separately.
+- Rust returns Python's verdict on all 4 + 52 + 540 cases, every
+  intermediate matches, and the Rust prover reproduces all 104 proofs byte
+  for byte.
+- The C link check of "Rust verifier" passes with the new header.
+
 ## Not done yet
 
 - **Statement 2** (HKDF-SHA-512, desktop wallet). It needs SHA-512 gadgets, the
@@ -412,9 +526,10 @@ version byte `0x02`, proofs of 130,218 bytes.
   prover.
 - **Core integration.** Annex TLV, rescue sighash with `key_version = 0x03`,
   the rescue token, validation weight and policy (M4-R design).
-- **Review.** A written security note with the re-derived bounds, an
-  internal design review, then the external cryptographer review that R1
-  recommends before H4R.
+- **Review.** Two internal reviews are done (section "2026-10-14 internal
+  reviews"). Still open: a written security note with every bound derived,
+  not sketched, and the external cryptographer review that R1 recommends
+  before H4R.
 - **Constant-time prover and zeroization.** The Python reference has neither.
 - **Further tests from R1 §7.**
   - Toy-parameter statistics (λ = 16, τ = 1, k = 4, where a cheating prover
