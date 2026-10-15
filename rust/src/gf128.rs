@@ -191,6 +191,23 @@ mod tests {
     }
 
     #[test]
+    fn byte_order_known_answer() {
+        // SPEC.md §1.3: bit i is the coefficient of X^i and byte 0 holds
+        // X^0..X^7. X^127 is byte 15 = 0x80, X is byte 0 = 0x02, and
+        // X^127 * X = X^128 = X^7 + X^2 + X + 1 is byte 0 = 0x87.
+        let mut x127 = [0u8; 16];
+        x127[15] = 0x80;
+        let mut x1 = [0u8; 16];
+        x1[0] = 0x02;
+        let mut want = [0u8; 16];
+        want[0] = 0x87;
+        assert_eq!(to_bytes(mul(from_bytes(&x127), from_bytes(&x1))), want);
+        assert_eq!(to_bytes(mul_x(from_bytes(&x127))), want);
+        let fm = FixedMul::new(from_bytes(&x127));
+        assert_eq!(to_bytes(fm.mul(from_bytes(&x1))), want);
+    }
+
+    #[test]
     fn fixed_mul_matches_mul() {
         for i in 0..50 {
             let a = sample(1000 + i);

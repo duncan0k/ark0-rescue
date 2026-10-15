@@ -58,6 +58,17 @@ class TestGF128(unittest.TestCase):
                 self.assertEqual(fm(x), gf128.mul(a, x))
         self.assertEqual(gf128.FixedMul(0)(self.rand()), 0)
 
+    def test_byte_order_known_answer(self):
+        """SPEC §1.3: bit i is the coefficient of X^i and byte 0 holds
+        X^0..X^7. X^127 is byte 15 = 0x80, X is byte 0 = 0x02, and
+        X^127 * X = X^128 = X^7 + X^2 + X + 1 is byte 0 = 0x87."""
+        x127 = gf128.from_bytes(bytes(15) + b"\x80")
+        x1 = gf128.from_bytes(b"\x02" + bytes(15))
+        want = b"\x87" + bytes(15)
+        self.assertEqual(gf128.to_bytes(gf128.mul(x127, x1)), want)
+        self.assertEqual(gf128.to_bytes(gf128.mul_x(x127)), want)
+        self.assertEqual(gf128.to_bytes(gf128.FixedMul(x127)(x1)), want)
+
     def test_byte_encoding(self):
         self.assertEqual(gf128.to_bytes(1), b"\x01" + bytes(15))
         self.assertEqual(gf128.from_bytes(bytes(15) + b"\x80"), 1 << 127)
