@@ -190,7 +190,7 @@ impl FixedMul {
 
     /// The table-driven form regardless of the CPU (for tests).
     #[cfg(test)]
-    fn new_tables(a: u128) -> Self {
+    pub(crate) fn new_tables(a: u128) -> Self {
         FixedMul {
             a,
             t: Some(Self::tables(a)),
