@@ -1,11 +1,28 @@
-# VOLEitH rescue proofs: specification v0.2
+# VOLEitH rescue proofs: specification v0.2, revision 1
 
-Status: **draft for review, not frozen** (2026-10-14). Nothing here has had an
-external cryptographic review. v0.2 replaces v0.1, which was never deployed: the
-construction is the same, but the 128 challenge bits are spread over 24 GGM
-trees of mixed depth (8 trees of depth 6, then 16 of depth 5) instead of 16
-trees of depth 8, because verification with 16 trees was too slow for the
-rescue lane's validation weight (NOTES.md, "v0.2 tree split").
+Status: **draft for review, not frozen**. v0.2, revision 1 (2026-10-14).
+Nothing here has had an external cryptographic review. v0.2 replaces v0.1,
+which was never deployed: the construction is the same, but the 128
+challenge bits are spread over 24 GGM trees of mixed depth (8 trees of depth
+6, then 16 of depth 5) instead of 16 trees of depth 8, because verification
+with 16 trees was too slow for the rescue lane's validation weight (NOTES.md,
+"v0.2 tree split").
+
+Revision 1 changes wording only. The version byte stays `0x02`; tags,
+parameters, the proof format and both vector files are unchanged. It adds
+the preconditions the consensus layer must enforce (§12.1), restates the
+assumptions (§13.1), and adds argument sketches and missing terms to §13,
+each marked as argued, not proven.
+
+**Reviews.** Two internal reviews of v0.2 (commit `0623179`) by AI models,
+not by external cryptographers, on 2026-10-14. gpt-6-astra (xhigh):
+**REVISE**; it found no forgery and no malleability of the proof encoding,
+and asked for the rescue-lane preconditions, a prover API that does not
+return secrets, and smaller fixes. Fable 5.1 (max): **PROCEED**; it found no
+construction defect, and asked for the same preconditions and for the
+bookkeeping and lemmas of §13 before v0.2 is frozen. NOTES.md, "2026-10-14
+internal reviews", lists every finding and what was done about it. No
+external review has been done.
 
 This document specifies a non-interactive zero-knowledge proof of knowledge,
 used as a signature of knowledge on a public message, for the signet rescue
@@ -282,6 +299,17 @@ target `v`, `P_s(x0) = v` holds for at most `n_v` values of `s`: each half is
 `ε_v = (n_v/2^128)^2`-almost uniform, and appending the identity on `x1` makes it
 `ε_v`-almost universal and hiding on `x0` [FAEST v1.1 Prop. 1–2]. For statement
 0x01, `n_v = 330` and `ε_v ≤ 2^−239.2`.
+
+**Both keys are load-bearing** (argued in the 2026-10-14 internal review, not
+proven). One polynomial hash alone gives `n_v/2^128 ≈ 2^−119.6`, and the
+`C(τ,2) = 276` factor of §13.2 would leave `2^−111.5` per query, short of the
+128-bit target; the second, independent key brings the term to `2^−231.1`. A
+later version must not drop either half to save work. The argument uses
+these properties of `VH`, all of which must be kept: it is GF(2)-linear; each
+half is `(n_v/2^128)`-almost uniform on `x0` (every exponent is ≥ 1); the keys
+`s` and `t` are independent; the 256 bits of `x1` are a one-time pad on the
+output, so `ũ = VH(u)` hides `u`; and it is applied to all `ℓ̂` rows, mask rows
+included.
 
 Prover: `ũ = VH(u)`, `Ṽ_j = VH(V_j)` for each column, and
 `h_V = SHAKE256[hv](Ṽ_0 ‖ … ‖ Ṽ_127, 32)`.
@@ -701,42 +729,123 @@ encoding of the same proof.
 bit, each proof section, length ±1, wrong `m`, `y`, `K`, `suffix` and statement
 id) that every conforming verifier must reject.
 
-Properties: the work is the same for every input that passes steps 1–6; no
-step depends on secret data; there is no input on which the verifier must
-abort, loop or allocate a size taken from the proof. An implementation must
-treat any internal error as rejection. Every challenge value, including
-`Δ = 0`, is valid.
+Properties:
+
+- Steps 1–6 need only the fixed sizes of the statement id, not its circuit.
+  An implementation that builds a statement's circuit lazily must do so after
+  step 6, or the first malformed input in a process pays for the build.
+- The work after step 6 is bounded but not constant. Fixed work dominates it
+  (about 5.3 MB of SHAKE256 output and the circuit's keys), and it varies
+  with the bits of `Δ = chall3`: each set bit `Δ_j` adds a conditional XOR of
+  `ũ` (step 9) and of `d` (step 10) and, outside tree 0, of a correction `c_i`
+  (step 8). For `Δ = 2^128 − 1` (`chall3 = ff…ff`) that is 1,324,702 bytes of
+  XOR. Measured, the median time of that input, of a valid proof over a
+  65,535-byte message and of both together is within 0.9 ms (3%) of a valid
+  proof's (NOTES.md, "2026-10-14 internal reviews").
+- Every input that passes steps 1–6 costs a full verification before it can
+  be rejected. Validation weight and relay policy must price a well-formed
+  invalid proof like a valid one (§12.1).
+- No step depends on secret data; there is no input on which the verifier
+  must abort, loop or allocate a size taken from the proof. An implementation
+  must treat any internal error as rejection.
+- Every challenge value, including `Δ = 0`, is valid. With `Δ = 0` every key
+  equals its tag (`Q = V`, `B_t = A0_t`), so a `b̃` computed from the tags
+  passes for any `d`: the check then says nothing about the witness. This is
+  not a hole. `Δ` is a random-oracle output, so a prover gets `Δ = 0` with
+  probability `2^−128` per `ch3` query, and the `2^{1−λ}` term of §13.2 already
+  counts every root of the final check, `Δ = 0` included. A special case that
+  rejected `Δ = 0` would only reject honest proofs.
 
 ## 12. Use in the rescue lane
 
-This section restates the interface of `m4-design-2026-10-14.md` §11; the
-consensus details belong to the M4-R design.
+This section restates the interface of `m4-design-2026-10-14.md` §11 and lists
+what the consensus layer must enforce (§12.1); the consensus details belong
+to the M4-R design.
 
 - The proof is carried in the annex as one element, at most one proof per
   input (4R-3, 4R-9). Statement 0x01 proofs are 130,218 bytes (130,218 WU).
-- `m = rescue sighash ‖ network id ‖ public key` (or the public-key
-  commitment of 4R-6); this specification treats `m` as opaque bytes. The rescue sighash
+- `m = rescue sighash ‖ network id ‖ public-key commitment` (4R-6); the
+  library treats `m` as opaque bytes. The rescue sighash
   (`key_version = 0x03`) omits `sha_annex`, so the proof never commits to
   itself; other signatures in the input commit to the full annex (4R-2, 4R-3).
 - The statement id and public inputs come from the rescue token; the node
   checks the key relation natively (4R-7) and calls `verify(statement, m, π)`.
-- 4R-6 requires that a proof cannot be moved to another transaction or mauled
-  into another valid proof: §13.4.
+- 4R-6 requires that a proof can neither be moved to another transaction nor
+  mauled into another valid proof. The first is a property of the sighash
+  (§12.1 item 2); the second is argued in §13.4, not proven.
+
+### 12.1 Preconditions the consensus layer must enforce
+
+A valid proof shows only that its maker knew some `x` with
+`HMAC-SHA256(K, x ‖ suffix) = y`, and binds that to `m`. None of the following
+is a property of the proof system; if the rescue-lane rules miss one, coins
+can be stolen however sound the proof is. They are hard requirements on the
+M4-R design (from the 2026-10-14 internal reviews; not yet checked against
+that design):
+
+1. **`y` is fixed by the spent output.** The node takes `y` from the rescue
+   token and checks natively that `0 < y < n` (the secp256k1 group order) and
+   that `x(y·G) = P`, the x-only key of the output being spent (4R-7). The
+   spender has no other say in `y`: anyone can pick an `x` and compute a
+   matching `y`.
+2. **The rescue sighash is SIGHASH_ALL-type only.** It commits to every
+   prevout (amounts and scripts), every input and output, and the index of
+   the input being spent; ANYONECANPAY, NONE and SINGLE variants are invalid
+   for rescue spends. The proof binds only `m`, so two transactions with the
+   same `m` could swap proofs: that a proof cannot be moved to another
+   transaction is the sighash's job.
+3. **`m` is exactly 96 bytes**: rescue sighash (32) ‖ network id (32) ‖
+   public-key commitment (32). The library accepts messages of up to 65,535
+   bytes; the rescue adapter must accept only this form.
+4. **Publishing `y = d` burns the key.** A rescue spend puts the Schnorr secret
+   key `d` (`= y`) in the mempool, where classical observers see it too (a
+   quantum attacker could derive `d` from `P` anyway). So: all frozen outputs
+   of a key are rescued together, in one transaction, so that none of them
+   waits on the freeze rules alone while `d` is public; outputs paid to the
+   same `P` that are not frozen are moved by an ordinary spend before the
+   first rescue; the freeze covers every output paid to `P`, including those
+   created after it; and wallets never reuse `P` or `d` on other networks or
+   protocols.
+
+Not preconditions of this specification, but for the same design:
+validation weight and relay policy must price a well-formed invalid proof
+like a valid one (§11), and the weight was calibrated on one machine (Zen 2,
+NOTES.md); slower validators need a safety factor or a per-block or per-peer
+limit.
 
 ## 13. Security
 
 ### 13.1 Model and assumptions
 
+Revision 1 restates these assumptions after the 2026-10-14 internal
+reviews; the restatement is argued, not proven.
+
 - **Random oracles.** Every `SHAKE256[name]` is modelled as an independent
   random oracle (classical ROM). `rnd` may alternatively be modelled as a PRF
   keyed by `x` and `ρ`.
-- **One-wayness.** For uniform `x ∈ {0,1}^256`, given `(K, suffix)` and
-  `y = HMAC-SHA256(K, x ‖ suffix)`, finding any `x'` with the same output is hard.
-  The relation is length-preserving, so the extractor may return a different
-  preimage; that suffices for the rescue lane, which needs knowledge of *a*
-  preimage.
-- **Honest keys.** Statements are derived from honestly generated seeds;
-  security for adversarially chosen statements is not claimed.
+- **Knowledge soundness holds for every statement.** The extractor of §13.2
+  works whatever `(K, suffix, y)` is and however it was chosen; a spender who
+  picks `K` or `suffix` does not weaken it. (v0.2 assumed "honest keys" here
+  and claimed nothing for adversarial statements; that assumption is needed
+  only for the next item.)
+- **Unforgeability reduces to a fixed-target preimage problem.** Making a
+  valid proof without knowing a preimage reduces, through the extractor, to
+  finding `x'` with `HMAC-SHA256(K, x' ‖ suffix) = y` for a `y` that the chain
+  fixes (`x(y·G) = P` leaves only `d` and `n − d`; §12.1 item 1). The spender's
+  choice of `(K, suffix)` changes the function, not the target. For `y` the
+  HMAC output on a uniform 256-bit seed, that is a `2^256`-scale problem
+  classically and `2^128` with Grover; with `N` target keys the loss is at most
+  a factor `N`, irrelevant at 256 bits. The relation is length-preserving, so
+  the extractor may return a different preimage; that suffices for the rescue
+  lane, which needs knowledge of *a* preimage.
+- **Seed entropy.** The above assumes a seed `x` with 256 bits of entropy.
+  With `H(x)` bits, guessing `x` costs about `2^{H(x)}` classically and
+  `2^{H(x)/2}` Grover iterations, so the lane's strength against a quantum
+  attacker is about `min(2^64, 2^{H(x)/2})`, where `2^64` is Grover on `Δ` or on a
+  hidden seed (§13.6). A wallet seed with less than 128 bits of entropy makes
+  the lane weaker than the proof system.
+- **External preconditions.** The consensus layer enforces §12.1 items 1–4.
+  Without them nothing in §13 protects any coins.
 
 ### 13.2 Unforgeability (classical ROM, 128-bit target)
 
@@ -750,21 +859,38 @@ transcript, and round-by-round bad events — the bound becomes, with `Q_leaf`
 queries to `leaf`, `Q_1` to `tree`/`hcom`/`hv` and `Q_{2,j}` to `ch_j`:
 
 ```
-Adv_EUF-KO ≤ 3·(Q_leaf + Q_1 + Q_2)^2 / 2^256          (collisions/preimages of 256-bit outputs)
+Adv_EUF-KO ≤ Q_H^2 / 2^256                             (collisions of 256-bit outputs)
            + Q_{2,1} · C(τ,2) · ε_v                     (VOLE consistency, ≤ 2^−231.1 per query)
            + Q_{2,2} · ε_zk                             (ZKHash, ≈ 2^−128 per query)
            + Q_{2,3} · 2^{1−λ}                           (QuickSilver final check, 2^−127 per query)
+           + Q_{2,3} · 2^−λ                              (chall3 coincidence, 2^−128 per query)
            + Adv_OWF
 ```
+
+with `Q_H = Q_leaf + Q_1 + Q_{2,1} + Q_{2,2}`, the queries to oracles whose
+outputs have at least 256 bits.
 
 - This is the form of the bound at the end of the proof of FAEST v1.1
   Theorem 1 (p. 71), which is sharper than the theorem statement's
   `Q_2·(ε_v + ε_zk + 2^−λ)`. Its terms are re-derived here, conservatively, for
   our hash families.
+- **Revision 1** (2026-10-14 internal review; argued, not proven). The first
+  term was `3·(Q_leaf + Q_1 + Q_2)^2/2^256`: the factor 3 had no derivation,
+  and `Q_2` included `ch3`, whose 128-bit output has no useful collision. Now:
+  at most `Q_H^2/2` pairs of outputs, each colliding with probability
+  `2^−256`, with a factor 2 to spare for a query that hits a value fixed
+  earlier in the transcript. The `chall3` term is new: the verifier compares
+  `SHAKE256[ch3](chall2 ‖ ã ‖ b̃')` with the `chall3` in the proof, not `b̃'`
+  with `b̃`, so a `ch3` query can also succeed when `b̃' ≠ b̃` and the 128-bit
+  outputs coincide. That is a fixed-point event, `2^−128` per query, not a
+  birthday bound, because `Δ`, and with it `b̃'`, is that same query's output.
+  It is dominated by the term above it.
 - The `C(τ,2)·ε_v` term is FAEST's Claim 1 (from BBD+23 Theorem 2, SoftSpokenVOLE
   with the repetition code over the τ trees). With `τ = 24`, `C(τ,2) = 276`
   (v0.1: 120), and `ε_v ≤ (330/2^128)^2` keeps the term at `2^−231.1` per query
   (v0.1: `2^−232.3`); FAEST v1.1 needed `B = 16` extra hash bits for the same factor.
+  The exact source and form of the `C(τ,2)` factor still need checking; at
+  `ε_v ≈ 2^−239` any factor polynomial in `τ` is irrelevant.
 - **What else depends on τ or the depths** (re-checked for v0.2):
   - The final-check term `2^{1−λ}`, the challenge space and brute force on `Δ`
     (§13.6) depend on `Σ_i k_i = λ = 128` only, which mixed depths keep.
@@ -774,8 +900,9 @@ Adv_EUF-KO ≤ 3·(Q_leaf + Q_1 + Q_2)^2 / 2^256          (collisions/preimages 
     stays at the `2^{1−λ}` level. Smaller trees make one tree's bits easier to
     guess (`2^−5` instead of `2^−8`) without changing the total. This is the
     SoftSpokenVOLE argument behind FAEST v1.1 Theorem 1, whose parameter sets
-    already mix depths (FAEST-128s: depths 12 and 11); a reviewer should
-    confirm it for depths 6 and 5.
+    already mix depths (FAEST-128s: depths 12 and 11). The lemma sketch below
+    makes it explicit for depths 6 and 5; an external reviewer should still
+    confirm it.
   - The leaf-commitment and extraction terms count random-oracle queries, not
     leaves; a tree has fewer leaves (`N_i ≤ 64`) but every leaf is still bound
     by a 256-bit commitment.
@@ -783,7 +910,28 @@ Adv_EUF-KO ≤ 3·(Q_leaf + Q_1 + Q_2)^2 / 2^256          (collisions/preimages 
 - EUF-CMA follows FAEST v1.1 Theorem 2: signing queries are simulated by
   programming `ch1`, `ch2`, `ch3`; the added terms are PRG/PRF advantages of the
   tagged SHAKE256 calls and programming collisions bounded by the min-entropy of
-  `hcom` (256 bits) and `iv_pre` (128 bits).
+  `hcom` (256 bits) and `iv_pre` (128 bits). These terms are named here, not
+  derived; the one from `iv_pre`'s 128 bits must be checked against the number
+  of proofs per key, which is small in the rescue lane.
+
+**Lemma sketch: guessing part of `Δ`** (2026-10-14 internal review; argued,
+not proven). Fix everything the prover commits to before `chall1`, let `u_i` be
+tree `i`'s VOLE input as determined by its committed leaves, and let
+`e_i = u_i ⊕ c_i ⊕ u_0` (`e_0 = 0`; an honest prover has every `e_i = 0`). For every
+column `j` of tree `i`, `Q_j = V_j ⊕ Δ_j·(u_0 ⊕ e_i)`, so the verifier's
+consistency values are `Ṽ'_j = VH(V_j) ⊕ Δ_j·(VH(u_0) ⊕ VH(e_i) ⊕ ũ)`. Suppose `VH`
+has no collision on the `e_i`, which fails with probability at most
+`C(τ,2)·ε_v`. Then the trees with `VH(e_i) = ũ ⊕ VH(u_0)` share one value `e*`,
+and each column `j` of the other trees (the set `G`) pins `Δ_j` to the one
+value `g_j` that matches the committed `h_V`: the consistency check passes
+only on the affine sub-cube `{Δ : Δ_j = g_j for j ∈ G}`. On that sub-cube,
+`Q = V' ⊕ Δ·u'` for every column, with `u' = u_0 ⊕ e*` (the `u` the extractor
+uses) and `V'` known to the prover. The final check is then a polynomial of
+degree at most 2 in `Δ`, fixed before `Δ` is drawn, with at most two roots in
+the whole field, so it passes with probability at most `2·2^−128 = 2^{1−λ}`,
+whatever `|G|` and whatever the depths (5 or 6). A bad leaf (a commitment
+whose `leaf` query the extractor never saw) is usable only as the hidden
+leaf, which pins that tree's `k_i` bits of `Δ`; the same argument covers it.
 
 **This is a re-instantiation by analogy, not a proof.** The things that differ
 from FAEST v1.1 and must be re-checked by a reviewer: the hash families of
@@ -793,14 +941,23 @@ constraints of the same degree), `ℓ ≈ 2^15.4` and `C ≈ 2^15.4` instead of
 the reduction to one-wayness loses at most the number of target statements, or
 uses a multi-instance OWF assumption).
 
-### 13.3 Zero knowledge
+### 13.3 Zero knowledge (argued, not proven)
 
-Honest-verifier zero knowledge of the interactive protocol and simulation in
-the ROM follow FAEST v1.1 Theorem 2's games G6–G9: `u` and the `c_i` are
-pseudorandom given the openings (one hidden leaf per tree; Lemma 5, modelling
-`ggm`, `leaf` and `exp` as PRGs), `ũ` is masked by the 256 hash-mask rows, `ã`
-by `u*`, and `d` by `u[0..ℓ)`. `b̃` is determined by the rest. A proof reveals
-nothing about `x` beyond the statement.
+By analogy with FAEST v1.1 Theorem 2's games G6–G9, the interactive protocol
+is honest-verifier zero knowledge and proofs can be simulated in the ROM: `u`
+and the `c_i` are pseudorandom given the openings (one hidden leaf per tree;
+Lemma 5, modelling `ggm`, `leaf` and `exp` as PRGs), `ũ` is masked by the 256
+hash-mask rows, `ã` by `u*`, and `d` by `u[0..ℓ)`; `b̃` is determined by the
+rest. If this argument holds, an honestly generated proof reveals nothing
+about `x` beyond the statement.
+
+That is a property of the protocol, not of any code here. Both provers in
+this repository, the Python reference and the Rust crate, are test code: they
+are not constant time (they index 64 KiB GF(2^128) tables, and 16-entry
+windows of the carry-less multiply, with secret values such as VOLE tags and
+ZKHash accumulators), and they do not zeroize secrets. Demonstrations use
+test seeds only; a constant-time prover is a precondition for proving with
+any real seed (§14).
 
 ### 13.4 Strong unforgeability and non-malleability (argued, not proven)
 
@@ -816,10 +973,29 @@ preimage:
 - `iv_pre` itself (not only `iv`) is hashed (FAEST v3.0's strong-unforgeability
   fix).
 
+**Lemma sketch** (2026-10-14 internal review; argued, not proven). Let
+`π ≠ π'` both be valid for the same `(sid, pub, m)`. If the inputs of `ch1`,
+`ch2` and `ch3` are the same for both, then `iv_pre`, the `c_i`, `ũ`, `d`, `ã`,
+`chall3` and `hcom` are equal, and openings that differ while giving the same
+`h_i` need a 256-bit collision of `tree`, `leaf` or `ggm`; so `π' = π`.
+Otherwise `π'` uses a fresh random-oracle input in some round, every later
+challenge is fresh, and the simulation and straight-line extraction of FAEST
+v1.1 Theorem 2 apply to `π'`: the trees of a simulated proof are generated
+honestly, but a fresh `Δ'` differs from `Δ`, and so hides a different leaf in
+some tree, except with probability `2^−128`, so `π'` cannot reuse `π`'s
+openings. Hence `Adv_SUF-CMA ≤ Adv_EUF-CMA` plus collision terms of 256-bit
+outputs. Making this a proof needs a Fiat–Shamir simulation-extractability
+result (NOTES.md, question 3); §12 does not rely on it as proven.
+
 Moving a proof to another message or statement changes μ, hence every
-challenge. FAEST v3.0 likewise claims only *conjectured* strong unforgeability;
-we claim no more. Simulation extractability in the sense of 4R-6 is a
-reviewer question (§14, NOTES.md).
+challenge; moving it to another transaction with the same `m` is prevented by
+the sighash (§12.1 item 2), not by the proof. The owner of `x` can always make
+a different valid proof with a new `ρ`, so the `wtxid` of a rescue spend is
+malleable by its owner; that is inherent to any randomised proof or
+signature, and the consensus design must accept it. FAEST v3.0 likewise
+claims only *conjectured* strong unforgeability; we claim no more.
+Simulation extractability in the sense of 4R-6 is a reviewer question (§14,
+NOTES.md).
 
 ### 13.5 QROM
 
@@ -833,30 +1009,57 @@ and statement 2 always has preimages (R1 §5.2). We claim no QROM bound.
 FAEST v3.0's classical proof takes the same key-switching route, which is why
 §13.2 follows v1.1's extraction-based proof instead.
 
+**The threat model is quantum, the claims are classical** (2026-10-14
+internal review). The rescue lane exists because of quantum attackers, but
+§13.2–§13.4 are classical-ROM arguments. Against a quantum attacker only the
+best known attacks can be stated: Grover search for `Δ` (one of the at most
+two roots of the degree-2 final check, about `2^63.5` evaluations of the whole
+chain up to `ch3`) or for any hidden seed (128 per proof, each with its own
+tweak, about `2^64`), and `2^128` Grover iterations against the one-way
+function. The loss of a three-round Fiat–Shamir transform in the QROM is not
+known. The consensus design must record, as an explicit risk decision, that
+it accepts NIST category 1 strength against known quantum attacks, QROM
+security as a conjecture, and the seed-entropy precondition of §13.1. A
+larger margin needs a larger `λ`, which the proof size does not allow; that
+trade-off belongs in the same record.
+
 ### 13.6 Generic attacks
 
 - Seeds, `r`, `iv_pre`, `iv` and `Δ` are 128 bits: brute force costs `2^128`
   classically and about `2^64` Grover iterations (the FAEST-128 / NIST
-  category 1 level).
+  category 1 level). Grover's iterations are sequential: spread over `P`
+  machines, each still runs about `2^64/√P` of them. NIST's category
+  definitions take this depth limit into account (MAXDEPTH); `2^64` is an
+  operation count, not a time estimate.
 - Each `ggm`, `leaf` and `exp` call is separated by `iv` (fresh per proof) and
   the tree and node index, so one seed guess tests one target: no multi-target
   speed-up within or across proofs (FAEST v1.1 §10.2.2 and v3.0 tweaks).
-- Commitments and digests are 256 bits (collisions `2^128`).
-- Grinding challenges is the `Q·2^−127` term of §13.2.
+- Commitments and digests are 256 bits (collisions `2^128`). Two outputs have
+  128 bits. A collision of `iv` between two proofs (expected after about `2^64`
+  proofs) is harmless for binding, because `chall1` hashes `iv_pre`, not `iv`,
+  and it gives at most a two-target seed guess on those two proofs. Collisions
+  of `chall3` are not useful; what counts is a `ch3` output that coincides
+  with the `chall3` in a proof while `b̃' ≠ b̃`, the `Q_{2,3}·2^−λ` term of §13.2.
+- Grinding challenges is the `Q_{2,3}·(2^{1−λ} + 2^−λ)` part of §13.2.
 
 ## 14. Known limitations
 
 1. No formal security proof (§13.2); QROM security conjectured (§13.5); strong
-   unforgeability and simulation extractability argued only (§13.4).
-2. The Python reference is not constant time and keeps secrets in ordinary
-   memory. It is for specification and testing, not for proving with real
-   seeds on shared machines. A production prover must be constant time.
+   unforgeability and simulation extractability argued only (§13.4). The
+   lemma sketches of revision 1 come from an internal review.
+2. Neither prover is constant time and neither zeroizes secrets: the Python
+   reference and the Rust crate both index lookup tables with secret values
+   and keep secrets in ordinary memory (§13.3). They are for the
+   specification, tests, tools and demonstrations with test seeds. Proving
+   with a real seed requires a constant-time prover.
 3. Verification cost is dominated by ~5.3 MB of SHAKE256 output (§3.3). The
-   Rust verifier takes 34–38 ms single-threaded on a Zen 2 server (median;
-   NOTES.md, "v0.2 tree split"), against R1's estimate of 6–22 ms with AES-NI.
-   With 24 trees the proof pays for its validation weight with a margin of at
-   least 1.6 in every measured run; with v0.1's 16 trees (about 113 ms) it did
-   not.
+   Rust verifier takes 33–38 ms single-threaded on a Zen 2 server (median;
+   NOTES.md, "v0.2 tree split" and "2026-10-14 internal reviews"), against
+   R1's estimate of 6–22 ms with AES-NI. With 24 trees the proof pays for its
+   validation weight with a margin of 1.57–1.74 in every measured run,
+   including the most expensive invalid input and the longest message (§11);
+   with v0.1's 16 trees (about 113 ms) it did not. Only one machine was
+   measured.
 4. One parameter set; no BAVC, `T_open` or grinding (FAEST v2/v3 savings of a
    few hundred bytes deferred).
 5. Degree-2 QuickSilver only; statement 2 (HKDF-SHA-512) needs the degree-≤6
@@ -896,6 +1099,21 @@ From R1 (`R1-voleith-plan.md`):
 | R-e | No `param_id` field: the version byte fixes the parameters | one parameter set per version |
 | R-f | v0.2: `τ = 24` mixed-depth trees (8 trees of depth 6, then 16 of depth 5) instead of R1's `τ = 16`, `k = 8` | verification cost: 1,000 instead of 4,080 leaf expansions; the proof grows from 87,506 to 130,218 bytes and still pays for its validation weight (NOTES.md) |
 
+Considered in the 2026-10-14 internal reviews and left unchanged in v0.2;
+either change would need a new version:
+
+- **`rnd` hashes the wallet seed directly** (D9). That is fine in the ROM; if
+  the rng fails, proofs become deterministic per `(x, μ)`, which is benign.
+  Deriving a key `k_x` from `x` once and hashing `k_x` instead would be hygiene
+  only.
+- **Faster levers than `τ`.** Soundness does not depend on `τ` (`Σ k_i = 128`),
+  and FAEST's balanced split minimises `Σ_i 2^{k_i}` for a given `τ`. Two other
+  levers would cut verification work without growing the proof: SHAKE128
+  for `exp`, `ggm` and `leaf` (FAEST's choice at λ = 128; about 24% faster
+  than SHAKE256 on the benchmark machine, NOTES.md), and FAEST v3-style
+  `w`-bit grinding, which lowers `Σ k_i` to `128 − w` (fewer leaf expansions;
+  the prover pays about `2^w` extra attempts).
+
 ## 16. Versioning
 
 - The version byte (`0x02`) and the label `v0.2` in every tag identify this
@@ -912,6 +1130,11 @@ From R1 (`R1-voleith-plan.md`):
   length. v0.1's vectors are in git history only.
 - The circuit layer (§7) is unchanged; its serialization label (§7.6) names the
   circuit layer's own version and stays "circuit v0.1", so the digests are the same.
+- Revision 1 of v0.2 (2026-10-14) changes wording only, after two internal
+  reviews: §5.4 (both keys load-bearing), §11 (verification work), §12.1
+  (consensus preconditions), §13 (assumptions, missing terms, lemma
+  sketches, the quantum risk decision), §14 and §15. The version byte, the
+  tags, the parameters, the proof format and the vectors are unchanged.
 - v0.2 is a review draft. After review, a frozen version is published with new
   vectors.
 
