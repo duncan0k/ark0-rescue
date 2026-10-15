@@ -1,0 +1,59 @@
+[package]
+name = "voleith-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[lib]
+name = "voleith_fuzz"
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "=1.0.149"
+voleith = { path = ".." }
+
+# Its own workspace, so the parent crate's manifest stays untouched.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "verify_raw"
+path = "fuzz_targets/verify_raw.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "verify_mutate"
+path = "fuzz_targets/verify_mutate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ffi"
+path = "fuzz_targets/ffi.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "seed_corpus"
+path = "src/bin/seed_corpus.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "timing"
+path = "src/bin/timing.rs"
+test = false
+doc = false
+bench = false

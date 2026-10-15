@@ -1,0 +1,8 @@
+target/
+corpus/
+artifacts/
+coverage/
+logs/
+slow/
+target-asan/
+logs-phase1/
