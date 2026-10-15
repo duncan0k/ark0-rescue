@@ -14,7 +14,7 @@ use crate::gf128::{self, FixedMul};
 use crate::params::{LAMBDA, LAMBDA_BYTES, MAX_LEAVES, MAX_MESSAGE_LEN, RHO_BYTES, VERSION};
 use crate::statements::{self, Layout, STATEMENT1_ID};
 use crate::sym::{Tag, Xof};
-use crate::unihash::{VoleHash, ZkAcc, ZkHash};
+use crate::unihash::{CtMul, VoleHash, ZkAcc, ZkHash};
 use crate::vc;
 use crate::vole::{self, ConvertScratch};
 
@@ -233,7 +233,7 @@ fn verify_core(
         .finalize();
 
     // 9. VOLE consistency: h_V from VH(Q_j) + Delta_j * u_tilde, then chall2.
-    let vh = VoleHash::new(&chall1, ell);
+    let vh = VoleHash::<FixedMul>::new(&chall1, ell);
     let mut hv = Xof::new(Tag::Hv);
     for (j, col) in cols.chunks_exact(cb).enumerate() {
         let mut h = vh.hash(col);
@@ -262,14 +262,14 @@ fn verify_core(
         }
     }
     let rows = vole::columns_to_rows(&cols, cb, ell + LAMBDA);
-    let zk = ZkHash::new(&chall2);
+    let zk = ZkHash::<FixedMul>::new(&chall2);
     let mul_delta = FixedMul::new(delta);
     let mut acc = ZkAcc::default();
     circuit.verifier_terms(public_bits, &rows[..ell], delta, &mul_delta, |b| {
         zk.absorb(&mut acc, b)
     });
     let q_tilde = zk.finish(&acc, mask_element(&rows[ell..]));
-    let b_tilde = gf128::to_bytes(q_tilde ^ gf128::mul(gf128::from_bytes(&a_tilde), delta));
+    let b_tilde = gf128::to_bytes(q_tilde ^ gf128::mul_public(gf128::from_bytes(&a_tilde), delta));
 
     // 11. chall3' and the comparison.
     let check: [u8; 16] = Xof::new(Tag::Ch3)
@@ -472,7 +472,7 @@ fn prove_impl(
         .finalize();
 
     // Phase 2: VOLE consistency hash and witness commitment, chall2.
-    let vh = VoleHash::new(&chall1, ell);
+    let vh = VoleHash::<CtMul>::new(&chall1, ell);
     let u_tilde = vh.hash(&u);
     let mut hv = Xof::new(Tag::Hv);
     for col in v_cols.chunks_exact(cb) {
@@ -499,7 +499,7 @@ fn prove_impl(
 
     // Phase 3: QuickSilver, chall3.
     let rows = vole::columns_to_rows(&v_cols, cb, ell + LAMBDA);
-    let zk = ZkHash::new(&chall2);
+    let zk = ZkHash::<CtMul>::new(&chall2);
     let mut acc0 = ZkAcc::default();
     let mut acc1 = ZkAcc::default();
     circ.prover_terms(&public_bits, &w_bits, &rows[..ell], |a0, a1| {
