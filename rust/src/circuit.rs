@@ -11,6 +11,7 @@
 
 use crate::gf128::{self, FixedMul};
 use crate::sha256;
+use zeroize::Zeroizing;
 
 pub const CONST: u8 = 0;
 pub const PUB: u8 = 1;
@@ -307,8 +308,10 @@ impl Circuit {
         assert_eq!(public_bits.len(), self.n_public, "public input length");
         assert_eq!(witness_bits.len(), self.n_witness, "witness length");
         assert!(tags.len() >= self.n_witness, "tag length");
-        let mut bits: Vec<u8> = Vec::with_capacity(self.n_wires);
-        let mut macs: Vec<u128> = Vec::with_capacity(self.n_wires);
+        // Wire values and MACs are secret: zeroized on return, and allocated
+        // at their final size so that no reallocation leaves a copy.
+        let mut bits = Zeroizing::new(Vec::<u8>::with_capacity(self.n_wires));
+        let mut macs = Zeroizing::new(Vec::<u128>::with_capacity(self.n_wires));
         bits.extend_from_slice(&[0, 1]);
         bits.extend_from_slice(public_bits);
         bits.extend_from_slice(&witness_bits[..self.n_secret]);

@@ -9,6 +9,7 @@
 use crate::bits;
 use crate::gf128::{self, FixedMul};
 use crate::params::LAMBDA;
+use zeroize::Zeroize;
 
 /// Multiplication by a fixed key.
 pub trait KeyMul {
@@ -105,11 +106,19 @@ pub struct ZkHash<M: KeyMul> {
     mt: M,
 }
 
-/// A running ZKHash (Horner: h = h * s + x_i).
-#[derive(Clone, Copy, Default)]
+/// A running ZKHash (Horner: h = h * s + x_i). It depends on secret data
+/// on the prover side, so it is not `Copy` and is zeroized when dropped.
+#[derive(Default)]
 pub struct ZkAcc {
     hs: u128,
     ht: u128,
+}
+
+impl Drop for ZkAcc {
+    fn drop(&mut self) {
+        self.hs.zeroize();
+        self.ht.zeroize();
+    }
 }
 
 impl<M: KeyMul> ZkHash<M> {

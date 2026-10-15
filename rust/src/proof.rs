@@ -17,6 +17,7 @@ use crate::sym::{Tag, Xof};
 use crate::unihash::{CtMul, VoleHash, ZkAcc, ZkHash};
 use crate::vc;
 use crate::vole::{self, ConvertScratch};
+use zeroize::{Zeroize, Zeroizing};
 
 /// Proof length in bytes for a registered statement id.
 pub fn proof_length(statement_id: u8) -> Option<usize> {
@@ -320,7 +321,8 @@ pub enum ProveError {
 /// The prover's intermediate values, for comparison with the vectors'
 /// intermediates; only `prove_traced` (cargo feature `test-trace`) fills it.
 /// It holds the root seed `r` and the tree roots, from which the witness can
-/// be recovered, so it has no `Debug` and `prove` never produces it.
+/// be recovered, so it has no `Debug`, `prove` never produces it, and it is
+/// zeroized when dropped.
 #[doc(hidden)]
 #[derive(Default)]
 pub struct ProverTrace {
@@ -340,13 +342,23 @@ pub struct ProverTrace {
     pub chall3: [u8; 16],
 }
 
+impl Drop for ProverTrace {
+    fn drop(&mut self) {
+        self.r.zeroize();
+        self.roots.zeroize();
+    }
+}
+
 /// Proof of knowledge of `witness` for the statement, bound to `message`
 /// (SPEC.md §9). `rho` is the 32 bytes of hedging randomness (the output of
 /// the single rng(32) call of the reference); it must be fresh and secret for
 /// real use.
 ///
-/// This prover is for tests and tools: it is not constant time and does not
-/// zeroize its secrets.
+/// The field arithmetic and the control flow on secret data are constant
+/// time, and every secret buffer the prover allocates is zeroized before it
+/// is freed; the stack the prover used is overwritten before returning (best
+/// effort). The caller owns `witness` and `rho` and must clear them itself.
+/// See rust/CT-AUDIT.md for what was checked and what remains.
 pub fn prove(
     statement_id: u8,
     public_inputs: &[u8],
@@ -355,7 +367,7 @@ pub fn prove(
     rho: &[u8; RHO_BYTES],
 ) -> Result<Vec<u8>, ProveError> {
     let lay = statements::layout(statement_id).ok_or(ProveError::UnknownStatement)?;
-    prove_impl(
+    let res = prove_impl(
         &lay,
         statement_id,
         public_inputs,
@@ -363,7 +375,21 @@ pub fn prove(
         message,
         rho,
         None,
-    )
+    );
+    scrub_stack();
+    res
+}
+
+/// Overwrite with zeros the stack below the caller's frame, where the frames
+/// of `prove_impl` and its callees held copies of secrets (seeds, hash
+/// states, field elements). Best effort: the compiler decides frame layout,
+/// so this covers `SCRUB_BYTES` below this frame and nothing else.
+#[inline(never)]
+fn scrub_stack() {
+    const SCRUB_BYTES: usize = 64 * 1024;
+    let mut buf = [0u8; SCRUB_BYTES];
+    buf.zeroize();
+    core::hint::black_box(&buf);
 }
 
 /// `prove`, also returning the prover's intermediate values, secrets
@@ -387,8 +413,9 @@ pub fn prove_traced(
         message,
         rho,
         Some(&mut trace),
-    )?;
-    Ok((proof, trace))
+    );
+    scrub_stack();
+    Ok((proof?, trace))
 }
 
 fn prove_impl(
@@ -419,35 +446,43 @@ fn prove_impl(
     let tau = split.tau();
     let (ell, lhat, cb) = (lay.ell, lay.lhat, lay.c_bytes);
     let public_bits = statements::s1_public_bits(&parsed);
-    let (_, w_bits, ok) = circ.evaluate(&public_bits, &statements::s1_secret_bits(witness));
+    // Every secret buffer below is Zeroizing (or zeroizes itself on drop:
+    // vc::Tree, ConvertScratch, ZkAcc) and is allocated at its final size,
+    // so no reallocation leaves a copy behind.
+    let secret_bits = Zeroizing::new(statements::s1_secret_bits(witness));
+    let (wires, w_bits, ok) = circ.evaluate(&public_bits, &secret_bits);
+    let (_wires, w_bits) = (Zeroizing::new(wires), Zeroizing::new(w_bits));
     if !ok {
         return Err(ProveError::RelationFails);
     }
 
     // Phase 1: randomness, IV, VOLE commitment, chall1.
     let mu = compute_mu(statement_id, public_inputs, message);
-    let rnd: [u8; 32] = Xof::new(Tag::Rnd)
-        .update(&(witness.len() as u16).to_le_bytes())
-        .update(witness)
-        .update(&mu)
-        .update(rho)
-        .finalize();
-    let r = arr16(&rnd[..16]);
+    let rnd: Zeroizing<[u8; 32]> = Zeroizing::new(
+        Xof::new(Tag::Rnd)
+            .update(&(witness.len() as u16).to_le_bytes())
+            .update(witness)
+            .update(&mu)
+            .update(rho)
+            .finalize(),
+    );
+    let r: &[u8] = &rnd[..16];
     let iv_pre = arr16(&rnd[16..]);
     let iv: [u8; 16] = Xof::new(Tag::Iv).update(&iv_pre).update(&mu).finalize();
-    let mut roots = vec![0u8; tau * LAMBDA_BYTES];
+    let mut roots = Zeroizing::new(vec![0u8; tau * LAMBDA_BYTES]);
     Xof::new(Tag::Root)
         .update(&iv)
-        .update(&r)
+        .update(r)
         .finalize_into(&mut roots);
 
     let mut trees = Vec::with_capacity(tau);
-    let mut v_cols = vec![0u8; LAMBDA * cb];
-    let mut us = vec![vec![0u8; cb]; tau];
+    let mut v_cols = Zeroizing::new(vec![0u8; LAMBDA * cb]);
+    let mut us = Zeroizing::new(vec![vec![0u8; cb]; tau]);
     let mut scratch = ConvertScratch::new(cb);
     for (i, u_i) in us.iter_mut().enumerate() {
         let depth = split.depth(i);
-        let tree = vc::commit(&arr16(&roots[16 * i..16 * i + 16]), &iv, i as u8, depth);
+        let root: &[u8; 16] = roots[16 * i..16 * i + 16].try_into().expect("16 bytes");
+        let tree = vc::commit(root, &iv, i as u8, depth);
         let first = split.offset(i);
         let tree_cols = &mut v_cols[first * cb..(first + depth) * cb];
         let mut col_refs: Vec<&mut [u8]> = tree_cols.chunks_exact_mut(cb).collect();
@@ -461,7 +496,7 @@ fn prove_impl(
         );
         trees.push(tree);
     }
-    let u = us[0].clone();
+    let u = Zeroizing::new(us[0].clone());
     let mut c_all = Vec::with_capacity((tau - 1) * cb);
     for u_i in &us[1..] {
         c_all.extend(u.iter().zip(u_i.iter()).map(|(a, b)| a ^ b));
@@ -505,7 +540,7 @@ fn prove_impl(
         .finalize();
 
     // Phase 3: QuickSilver, chall3.
-    let rows = vole::columns_to_rows(&v_cols, cb, ell + LAMBDA);
+    let rows = Zeroizing::new(vole::columns_to_rows(&v_cols, cb, ell + LAMBDA));
     let zk = ZkHash::<CtMul>::new(&chall2);
     let mut acc0 = ZkAcc::default();
     let mut acc1 = ZkAcc::default();
@@ -513,10 +548,10 @@ fn prove_impl(
         zk.absorb(&mut acc0, a0);
         zk.absorb(&mut acc1, a1);
     });
-    let u_star = bits::load_bits(&u, ell, LAMBDA);
-    let v_star = mask_element(&rows[ell..]);
-    let a_tilde = gf128::to_bytes(zk.finish(&acc1, u_star));
-    let b_tilde = gf128::to_bytes(zk.finish(&acc0, v_star));
+    let u_star = Zeroizing::new(bits::load_bits(&u, ell, LAMBDA));
+    let v_star = Zeroizing::new(mask_element(&rows[ell..]));
+    let a_tilde = gf128::to_bytes(zk.finish(&acc1, *u_star));
+    let b_tilde = gf128::to_bytes(zk.finish(&acc0, *v_star));
     let chall3: [u8; 16] = Xof::new(Tag::Ch3)
         .update(&chall2)
         .update(&a_tilde)
@@ -541,10 +576,10 @@ fn prove_impl(
     if let Some(slot) = trace {
         *slot = ProverTrace {
             mu,
-            r,
+            r: arr16(r),
             iv_pre,
             iv,
-            roots,
+            roots: roots.to_vec(),
             tree_hashes: trees.iter().map(|t| t.hash).collect(),
             hcom,
             chall1,

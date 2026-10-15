@@ -13,6 +13,7 @@ use crate::circuit::{Circuit, GateCounts};
 use crate::gadgets;
 use crate::params::{TreeSplit, HEADER_BYTES, LAMBDA_BYTES, QS_MASK_BITS, SPLIT, VH_MASK_BITS};
 use crate::sha256;
+use zeroize::Zeroizing;
 
 pub const STATEMENT1_ID: u8 = 0x01;
 pub const S1_WITNESS_LEN: usize = 32;
@@ -92,16 +93,21 @@ pub fn s1_public_bits(p: &S1Public<'_>) -> Vec<u8> {
     out
 }
 
-/// Witness bit 8n + b is bit b of x[n].
+/// Witness bit 8n + b is bit b of x[n]. Allocated at its final size, so
+/// the only copy is the returned vector (the prover zeroizes it).
 pub fn s1_secret_bits(x: &[u8]) -> Vec<u8> {
-    x.iter()
-        .flat_map(|&byte| (0..8).map(move |b| (byte >> b) & 1))
-        .collect()
+    let mut out = Vec::with_capacity(8 * x.len());
+    for &byte in x {
+        for b in 0..8 {
+            out.push((byte >> b) & 1);
+        }
+    }
+    out
 }
 
-/// HMAC-SHA256(K, x || suffix).
+/// HMAC-SHA256(K, x || suffix). The copy of x is zeroized.
 pub fn s1_hmac(key: &[u8], suffix: u8, x: &[u8]) -> [u8; 32] {
-    let mut m = Vec::with_capacity(x.len() + 1);
+    let mut m = Zeroizing::new(Vec::with_capacity(x.len() + 1));
     m.extend_from_slice(x);
     m.push(suffix);
     sha256::hmac_sha256(key, &m)

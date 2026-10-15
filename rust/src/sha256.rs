@@ -4,6 +4,8 @@
 
 #![forbid(unsafe_code)]
 
+use zeroize::{Zeroize, Zeroizing};
+
 pub const K256: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -59,10 +61,13 @@ pub fn compress(state: &[u32; 8], block: &[u8; 64]) -> [u32; 8] {
     for i in 0..8 {
         res[i] = state[i].wrapping_add(out[i]);
     }
+    // The message schedule holds the block (the witness, in the prover).
+    w.zeroize();
     res
 }
 
-/// Incremental SHA-256.
+/// Incremental SHA-256. The chaining value and the buffered input are
+/// zeroized when it is dropped.
 pub struct Sha256 {
     state: [u32; 8],
     buf: [u8; 64],
@@ -78,6 +83,13 @@ impl Default for Sha256 {
             buf_len: 0,
             total: 0,
         }
+    }
+}
+
+impl Drop for Sha256 {
+    fn drop(&mut self) {
+        self.state.zeroize();
+        self.buf.zeroize();
     }
 }
 
@@ -100,6 +112,7 @@ impl Sha256 {
             let mut b = [0u8; 64];
             b.copy_from_slice(block);
             self.state = compress(&self.state, &b);
+            b.zeroize();
         }
         let rest = blocks.remainder();
         self.buf[..rest.len()].copy_from_slice(rest);
@@ -163,10 +176,10 @@ pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     let mut inner = Sha256::default();
     inner.update(&key_block(key, 0x36));
     inner.update(msg);
-    let ih = inner.finalize();
+    let ih = Zeroizing::new(inner.finalize());
     let mut outer = Sha256::default();
     outer.update(&key_block(key, 0x5c));
-    outer.update(&ih);
+    outer.update(&*ih);
     outer.finalize()
 }
 

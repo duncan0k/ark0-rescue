@@ -22,8 +22,14 @@ bench-splits = []
 test-trace = []
 
 [dependencies]
-# SHAKE256 (FIPS 202). The only runtime dependency; see NOTES.md.
-sha3 = { version = "=0.10.9", default-features = false }
+# SHAKE256 (FIPS 202); see NOTES.md. Its `zeroize` feature clears the Keccak
+# state when a hasher or XOF reader is dropped.
+sha3 = { version = "=0.10.9", default-features = false, features = ["zeroize"] }
+# Clearing the prover's secrets (rust/CT-AUDIT.md). 1.8.2 rather than 1.9.x:
+# over a year old, MSRV 1.60, inside sha3's `^1.6` range, and without the
+# `optimization_barrier` code that 1.9.0 introduced and 1.9.1 had to fix.
+# No default features: `alloc` only, no derive macro (no proc-macro deps).
+zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 # Reading the JSON test vectors.
