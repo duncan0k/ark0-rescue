@@ -285,6 +285,14 @@ was not resolved more precisely. The prover is about 4× slower there (§1).
   dev profile with debug assertions.
 - `cargo clippy --all-targets` and `--all-targets --all-features` are clean.
   `cargo fmt --check` passes.
+- After the review fixes F1–F4 (2026-10-15): `cargo test --release` and
+  `cargo test` both pass 33 tests (23 unit, including the two new Welch's t
+  tests, 1 cold-reject, 2 differential, 7 vectors), plus 2 ignored timing
+  tests. The KAT vectors and the 100 differential cases are reproduced
+  byte for byte. `cargo clippy --all-targets --all-features -- -D warnings`
+  is clean and `cargo fmt --check` passes. Under `cargo test --all-targets`
+  the `prove_verify` bench only proves and verifies once (F4). The GF dudect
+  test rerun after F2 gives max |t| 1.06 (§4).
 - `cargo check --lib` passes for `aarch64-unknown-linux-gnu` and
   `i686-unknown-linux-gnu` (the portable path). They were not run: there is
   no cross toolchain here.
