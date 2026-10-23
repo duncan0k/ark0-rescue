@@ -82,7 +82,11 @@ Crash dumps and reports, before anything is read (a failure exits 1):
   of the user. With `--require-mlock`, `mlockall(MCL_CURRENT |
   MCL_FUTURE)` keeps every page out of swap; it needs `RLIMIT_MEMLOCK` of
   at least 128 MiB (`ulimit -l`) or root. Use it on a machine outside the
-  trust boundary.
+  trust boundary. Locked pages are not kept out of a hibernation image:
+  suspend-to-disk writes all of memory, locked or not. The claim holds
+  only with hibernation off (no `resume=` swap, `systemctl mask
+  hibernate.target hybrid-sleep.target suspend-then-hibernate.target`) or
+  with the hibernation image on encrypted storage.
 - Windows: `SetErrorMode` (no error dialogs);
   `WerAddExcludedApplication("voleith-prove.exe", FALSE)`, which excludes
   the program from Windows Error Reporting for the current user (a
@@ -95,7 +99,11 @@ Crash dumps and reports, before anything is read (a failure exits 1):
   honour that exclusion has not been checked on Windows, and a process
   of the same user can still read the tool's memory while it runs.
   `--require-mlock` is a usage error on Windows: the machine is the trust
-  boundary there, and swap is not a goal.
+  boundary there, and paging is not a goal. Pages of the tool can reach
+  the paging file (`pagefile.sys`) and, on hibernation, `hiberfil.sys`;
+  both stay on that machine's disk. If they must not hold the seed even
+  there, turn hibernation off (`powercfg /hibernate off`) and keep the
+  system drive encrypted (BitLocker), which also covers the paging file.
 
 Cleared in memory (zeroized when no longer needed, at the latest when
 `run()` returns, before the process exits):
@@ -119,7 +127,10 @@ Not cleared:
   and nothing is written;
 - what is outside the tool: the pipe buffer of the operating system and
   the memory of the program that restores the seed;
-- swap and hibernation files, except with `--require-mlock` on Linux.
+- swap, the paging file and hibernation images: `--require-mlock` (Linux)
+  keeps the tool's pages out of swap only, never out of a hibernation
+  image, so hibernation must be off (or its image encrypted) for that
+  claim to hold; on Windows neither is addressed.
 
 ## Windows
 
