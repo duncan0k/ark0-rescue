@@ -7,6 +7,10 @@
 //! and it zeroizes its secrets when they go out of scope; see
 //! `rust/CT-AUDIT.md` for what was checked and what remains.
 //!
+//! The prover is behind the cargo feature `prover` (on by default). Without
+//! it the crate is the verifier and the C ABI only: no prover code is
+//! compiled, so none can be linked.
+//!
 //! Unsafe code is forbidden in every module except [`ffi`], the C ABI shim,
 //! and `clmul`, the PCLMULQDQ multiplication.
 
@@ -19,7 +23,7 @@ mod bits;
 mod circuit;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod clmul;
-#[cfg(test)]
+#[cfg(all(test, feature = "prover"))]
 mod dudect;
 mod gadgets;
 mod gf128;
@@ -31,13 +35,13 @@ mod unihash;
 mod vc;
 mod vole;
 
-pub use proof::{
-    proof_length, prove, verify, verify_traced, ProveError, ProverTrace, VerifierTrace,
-};
+pub use proof::{proof_length, verify, verify_traced, VerifierTrace};
+#[cfg(feature = "prover")]
+pub use proof::{prove, ProveError, ProverTrace};
 
 /// The prover with its intermediate values, secrets included: for the vector
-/// tests only (feature `test-trace`).
-#[cfg(feature = "test-trace")]
+/// tests only (features `prover` and `test-trace`).
+#[cfg(all(feature = "prover", feature = "test-trace"))]
 #[doc(hidden)]
 pub use proof::prove_traced;
 pub use statements::{s1_encode_public, STATEMENT1_ID};

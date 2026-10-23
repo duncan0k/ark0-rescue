@@ -13,8 +13,12 @@ use sha3::Shake256;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tag {
     Mu,
+    /// Prover only.
+    #[cfg(feature = "prover")]
     Rnd,
     Iv,
+    /// Prover only.
+    #[cfg(feature = "prover")]
     Root,
     Ggm,
     Leaf,
@@ -33,8 +37,10 @@ impl Tag {
     fn name(self) -> &'static [u8] {
         match self {
             Tag::Mu => b"mu",
+            #[cfg(feature = "prover")]
             Tag::Rnd => b"rnd",
             Tag::Iv => b"iv",
+            #[cfg(feature = "prover")]
             Tag::Root => b"root",
             Tag::Ggm => b"ggm",
             Tag::Leaf => b"leaf",

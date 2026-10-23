@@ -12,13 +12,20 @@ name = "voleith"
 crate-type = ["rlib", "staticlib"]
 
 [features]
+default = ["prover"]
+# The prover: `prove`, `ProveError`, the prover halves of the VOLE
+# commitment and of the circuit, and the dudect timing tests. Without it
+# (`--no-default-features`) the library is the verifier and the C ABI only,
+# for linking into Bitcoin Core; see NOTES.md, "2026-10-23 tools and
+# verifier-only build".
+prover = []
 # Exposes `voleith::bench`, which verifies and proves under other tree splits.
 # Only the benchmark uses it; verify() and the C ABI never do.
 bench-splits = []
 # Exposes `voleith::prove_traced`, which also returns the prover's
 # intermediate values, secrets included. Only the tests enable it (through
 # the dev-dependency below); never enable it in a build that proves with a
-# real seed.
+# real seed. It adds nothing without `prover`.
 test-trace = []
 
 [dependencies]
@@ -39,8 +46,9 @@ secp256k1 = { version = "=0.31.1", default-features = false, features = ["std"] 
 # The crate itself with `test-trace`, so that `cargo test` compares the
 # prover's intermediates with the vector file. Features of dev-dependencies
 # apply only when tests, benches or examples are built, never to the library
-# alone.
-voleith = { path = ".", features = ["test-trace"] }
+# alone. No default features, so that `cargo test --no-default-features`
+# tests the verifier-only library.
+voleith = { path = ".", default-features = false, features = ["test-trace"] }
 
 [profile.release]
 opt-level = 3
@@ -59,8 +67,9 @@ opt-level = 3
 [[bench]]
 name = "verify"
 harness = false
-required-features = ["bench-splits"]
+required-features = ["bench-splits", "prover"]
 
 [[bench]]
 name = "prove_verify"
 harness = false
+required-features = ["prover"]

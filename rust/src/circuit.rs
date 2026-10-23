@@ -11,6 +11,7 @@
 
 use crate::gf128::{self, FixedMul};
 use crate::sha256;
+#[cfg(feature = "prover")]
 use zeroize::Zeroizing;
 
 pub const CONST: u8 = 0;
@@ -257,6 +258,7 @@ impl Circuit {
     /// Evaluate in the clear. Returns every wire value, the witness bits and
     /// whether every ASSERT holds. The work and the memory accesses depend
     /// only on the instruction list, never on the wire values.
+    #[cfg(feature = "prover")]
     pub fn evaluate(&self, public_bits: &[u8], secret_bits: &[u8]) -> (Vec<u8>, Vec<u8>, bool) {
         assert_eq!(public_bits.len(), self.n_public, "public input length");
         assert_eq!(secret_bits.len(), self.n_secret, "secret input length");
@@ -298,6 +300,7 @@ impl Circuit {
     /// Prover terms (SPEC.md §6.2) for every constraint in order:
     /// `sink(A0_t, A1_t)` with A0 = v_a v_b and A1 = b_a v_b + b_b v_a + v_c.
     /// `tags[r]` is the VOLE tag v[r] of witness bit r.
+    #[cfg(feature = "prover")]
     pub fn prover_terms(
         &self,
         public_bits: &[u8],

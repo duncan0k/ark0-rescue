@@ -23,8 +23,10 @@ pub trait KeyMul {
 
 /// Constant-time multiplication by a key, for secret operands. The prover
 /// must name it explicitly; nothing stops a `FixedMul` in its place.
+#[cfg(feature = "prover")]
 pub struct CtMul(u128);
 
+#[cfg(feature = "prover")]
 impl KeyMul for CtMul {
     #[inline]
     fn new(key: u128) -> Self {

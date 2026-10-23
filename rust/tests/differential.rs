@@ -114,6 +114,7 @@ fn differential_set_agrees_with_python() {
     );
 }
 
+#[cfg(feature = "prover")]
 #[test]
 fn prover_reproduces_differential_proofs() {
     let d = load_json(FILE);

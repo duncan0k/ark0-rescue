@@ -5,18 +5,24 @@
 //! `bench` module, which exists only with the `bench-splits` feature. The
 //! prover's intermediate values, which include secrets, are reachable only
 //! through `prove_traced`, which exists only with the `test-trace` feature.
+//! Everything after the verifier exists only with the `prover` feature.
 
 #![forbid(unsafe_code)]
 
 use crate::bits;
 use crate::circuit::Circuit;
 use crate::gf128::{self, FixedMul};
-use crate::params::{LAMBDA, LAMBDA_BYTES, MAX_LEAVES, MAX_MESSAGE_LEN, RHO_BYTES, VERSION};
+#[cfg(feature = "prover")]
+use crate::params::RHO_BYTES;
+use crate::params::{LAMBDA, LAMBDA_BYTES, MAX_LEAVES, MAX_MESSAGE_LEN, VERSION};
 use crate::statements::{self, Layout, STATEMENT1_ID};
 use crate::sym::{Tag, Xof};
-use crate::unihash::{CtMul, VoleHash, ZkAcc, ZkHash};
+#[cfg(feature = "prover")]
+use crate::unihash::CtMul;
+use crate::unihash::{VoleHash, ZkAcc, ZkHash};
 use crate::vc;
 use crate::vole::{self, ConvertScratch};
+#[cfg(feature = "prover")]
 use zeroize::{Zeroize, Zeroizing};
 
 /// Proof length in bytes for a registered statement id.
@@ -309,6 +315,7 @@ fn verify_core(
 // ------------------------------------------------------------------ prover
 
 /// Why `prove` refused.
+#[cfg(feature = "prover")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProveError {
     UnknownStatement,
@@ -323,6 +330,7 @@ pub enum ProveError {
 /// It holds the root seed `r` and the tree roots, from which the witness can
 /// be recovered, so it has no `Debug`, `prove` never produces it, and it is
 /// zeroized when dropped.
+#[cfg(feature = "prover")]
 #[doc(hidden)]
 #[derive(Default)]
 pub struct ProverTrace {
@@ -342,6 +350,7 @@ pub struct ProverTrace {
     pub chall3: [u8; 16],
 }
 
+#[cfg(feature = "prover")]
 impl Drop for ProverTrace {
     fn drop(&mut self) {
         self.r.zeroize();
@@ -359,6 +368,7 @@ impl Drop for ProverTrace {
 /// is freed; the stack the prover used is overwritten before returning (best
 /// effort). The caller owns `witness` and `rho` and must clear them itself.
 /// See rust/CT-AUDIT.md for what was checked and what remains.
+#[cfg(feature = "prover")]
 pub fn prove(
     statement_id: u8,
     public_inputs: &[u8],
@@ -389,6 +399,7 @@ pub fn prove(
 /// A panic inside `prove_impl` unwinds past `scrub_stack`: heap secrets are
 /// still cleared by their destructors during unwinding, but the stack is not
 /// scrubbed on that path.
+#[cfg(feature = "prover")]
 fn prove_scrubbed(
     lay: &Layout,
     statement_id: u8,
@@ -416,6 +427,7 @@ fn prove_scrubbed(
 /// secrets (seeds, hash
 /// states, field elements). Best effort: the compiler decides frame layout,
 /// so this covers `SCRUB_BYTES` below this frame and nothing else.
+#[cfg(feature = "prover")]
 #[inline(never)]
 fn scrub_stack() {
     const SCRUB_BYTES: usize = 64 * 1024;
@@ -426,7 +438,7 @@ fn scrub_stack() {
 
 /// `prove`, also returning the prover's intermediate values, secrets
 /// included. For the vector tests only (cargo feature `test-trace`).
-#[cfg(feature = "test-trace")]
+#[cfg(all(feature = "prover", feature = "test-trace"))]
 #[doc(hidden)]
 pub fn prove_traced(
     statement_id: u8,
@@ -451,6 +463,7 @@ pub fn prove_traced(
 
 /// The prover itself. Call it only through `prove_scrubbed`; never inline it
 /// (see there).
+#[cfg(feature = "prover")]
 #[inline(never)]
 fn prove_impl(
     lay: &Layout,
@@ -636,8 +649,12 @@ fn prove_impl(
 /// split other than `params::SPLIT`.
 #[cfg(feature = "bench-splits")]
 pub mod bench {
-    use super::{prove_scrubbed, verify_impl, ProveError};
-    use crate::params::{TreeSplit, RHO_BYTES};
+    use super::verify_impl;
+    #[cfg(feature = "prover")]
+    use super::{prove_scrubbed, ProveError};
+    use crate::params::TreeSplit;
+    #[cfg(feature = "prover")]
+    use crate::params::RHO_BYTES;
     use crate::statements;
 
     /// Proof length for a registered statement id under `split`.
@@ -660,6 +677,7 @@ pub mod bench {
     }
 
     /// `prove` under `split`, with the same stack scrub as `prove`.
+    #[cfg(feature = "prover")]
     pub fn prove(
         split: TreeSplit,
         statement_id: u8,

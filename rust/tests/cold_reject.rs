@@ -70,12 +70,15 @@ fn format_checks_do_not_build_the_circuit() {
     };
     assert_eq!(r, 0);
     // The prover's input checks: unknown id, witness length, relation.
-    let x = [1u8; 32];
-    let rho = [0u8; 32];
-    assert!(voleith::prove(2, &pub_inputs, &x, &msg, &rho).is_err());
-    assert!(voleith::prove(1, &pub_inputs, &x[..31], &msg, &rho).is_err());
-    assert!(voleith::prove(1, &pub_inputs, &x, &msg, &rho).is_err());
-    assert!(!circuit_is_built(STATEMENT1_ID), "prove built the circuit");
+    #[cfg(feature = "prover")]
+    {
+        let x = [1u8; 32];
+        let rho = [0u8; 32];
+        assert!(voleith::prove(2, &pub_inputs, &x, &msg, &rho).is_err());
+        assert!(voleith::prove(1, &pub_inputs, &x[..31], &msg, &rho).is_err());
+        assert!(voleith::prove(1, &pub_inputs, &x, &msg, &rho).is_err());
+        assert!(!circuit_is_built(STATEMENT1_ID), "prove built the circuit");
+    }
 
     // A structurally valid proof costs a full verification.
     assert!(!voleith::verify(1, &pub_inputs, &msg, &proof));

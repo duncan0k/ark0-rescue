@@ -303,7 +303,8 @@ pub fn build_statement1_circuit() -> crate::circuit::Circuit {
     b.build()
 }
 
-#[cfg(test)]
+// Both tests evaluate circuits in the clear or compute prover terms.
+#[cfg(all(test, feature = "prover"))]
 mod tests {
     use super::*;
     use crate::gf128::{self, FixedMul};

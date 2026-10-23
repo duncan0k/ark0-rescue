@@ -61,6 +61,7 @@ fn copath(depth: usize, jstar: usize, d: usize) -> usize {
 
 /// Prover side: the expanded tree of one root. Its node and leaf seeds are
 /// zeroized when it is dropped.
+#[cfg(feature = "prover")]
 pub struct Tree {
     pub hash: [u8; 32],
     depth: usize,
@@ -69,6 +70,7 @@ pub struct Tree {
     coms: Vec<Com>,
 }
 
+#[cfg(feature = "prover")]
 pub fn commit(root: &Seed, iv: &[u8; 16], tree: u8, depth: usize) -> Tree {
     debug_assert!((1..=MAX_DEPTH).contains(&depth));
     let n_leaves = 1 << depth;
@@ -97,6 +99,7 @@ pub fn commit(root: &Seed, iv: &[u8; 16], tree: u8, depth: usize) -> Tree {
     }
 }
 
+#[cfg(feature = "prover")]
 impl Drop for Tree {
     fn drop(&mut self) {
         self.nodes.zeroize();
@@ -105,6 +108,7 @@ impl Drop for Tree {
     }
 }
 
+#[cfg(feature = "prover")]
 impl Tree {
     /// The opening for hidden leaf j*: co-path seeds top-down, then com_{j*}.
     pub fn open(&self, jstar: usize) -> Vec<u8> {
@@ -160,7 +164,7 @@ pub fn reconstruct(
     th.finalize()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "prover"))]
 mod tests {
     use super::*;
 

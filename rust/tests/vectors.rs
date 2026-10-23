@@ -156,6 +156,7 @@ fn valid_vectors_verify_with_matching_intermediates() {
     }
 }
 
+#[cfg(feature = "prover")]
 #[test]
 fn prover_reproduces_vectors_byte_for_byte() {
     let d = doc();
@@ -196,6 +197,7 @@ fn prover_reproduces_vectors_byte_for_byte() {
     }
 }
 
+#[cfg(feature = "prover")]
 #[test]
 fn prover_refuses_bad_inputs() {
     let d = doc();
