@@ -11,7 +11,7 @@
 //! of the wrong length is an invalid proof. python/tools/verify_cli.py and
 //! go/cmd/voleith-verify behave the same.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 mod common;
 
@@ -25,7 +25,7 @@ const USAGE: &str = "usage: voleith-verify --k <ascii K> --suffix <0..255> --y-h
 
 fn run() -> Result<bool, String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let opts = parse_options(&args, &["k", "suffix", "y-hex", "msg-hex", "proof"])?;
+    let opts = parse_options(&args, &["k", "suffix", "y-hex", "msg-hex", "proof"], &[])?;
     let key = parse_k(&opts["k"])?;
     let suffix = parse_suffix(&opts["suffix"])?;
     let y = parse_y(&opts["y-hex"])?;

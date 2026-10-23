@@ -46,6 +46,27 @@ pub use proof::{prove, ProveError, ProverTrace};
 pub use proof::prove_traced;
 pub use statements::{s1_encode_public, STATEMENT1_ID};
 
+/// Fault injection for the tests of voleith-prove (feature
+/// `fault-injection`, never in a real build): a panic in the middle of
+/// `prove`, after the VOLE commitment, while secrets are in memory.
+#[cfg(all(feature = "prover", feature = "fault-injection"))]
+#[doc(hidden)]
+pub mod fault {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static PANIC_IN_PROVE: AtomicBool = AtomicBool::new(false);
+
+    pub fn panic_in_prove(on: bool) {
+        PANIC_IN_PROVE.store(on, Ordering::SeqCst);
+    }
+
+    pub(crate) fn check() {
+        if PANIC_IN_PROVE.load(Ordering::SeqCst) {
+            panic!("fault injection: panic inside prove");
+        }
+    }
+}
+
 /// Other tree splits, for the benchmark only (feature `bench-splits`).
 #[cfg(feature = "bench-splits")]
 pub use proof::bench;

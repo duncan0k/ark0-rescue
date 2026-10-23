@@ -358,6 +358,7 @@ version = "0.1.0"
 dependencies = [
  "getrandom",
  "keccak",
+ "libc",
  "secp256k1",
  "serde_json",
  "sha3",

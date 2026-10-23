@@ -18,6 +18,8 @@
 
 #![allow(dead_code)]
 
+pub mod os;
+
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
@@ -27,19 +29,25 @@ use zeroize::Zeroizing;
 
 pub const MAX_MESSAGE_LEN: usize = 65_535;
 
-/// The values of `names`, each given exactly once as `--name value`.
+/// The values of `names`, each given exactly once as `--name value`, and
+/// the `flags` that are present (each at most once, as `--flag`, mapped to
+/// an empty value).
 pub fn parse_options(
     args: &[OsString],
     names: &[&'static str],
+    flags: &[&'static str],
 ) -> Result<HashMap<&'static str, OsString>, String> {
     let mut out = HashMap::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        let Some(name) = a
-            .to_str()
-            .and_then(|s| s.strip_prefix("--"))
-            .and_then(|s| names.iter().find(|n| **n == s))
-        else {
+        let opt = a.to_str().and_then(|s| s.strip_prefix("--"));
+        if let Some(flag) = opt.and_then(|s| flags.iter().find(|n| **n == s)) {
+            if out.insert(*flag, OsString::new()).is_some() {
+                return Err(format!("--{flag} given twice"));
+            }
+            continue;
+        }
+        let Some(name) = opt.and_then(|s| names.iter().find(|n| **n == s)) else {
             return Err("unknown argument".into());
         };
         let Some(v) = it.next() else {
@@ -210,6 +218,26 @@ pub fn read_limited(path: &OsStr, limit: usize) -> std::io::Result<Result<Vec<u8
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publish_never_replaces() {
+        let dir = std::env::temp_dir().join(format!("voleith-publish-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (tmp, dest) = (dir.join("t"), dir.join("d"));
+        std::fs::write(&tmp, b"new").unwrap();
+        std::fs::write(&dest, b"old").unwrap();
+        let e = os::publish_no_replace(&tmp, &dest).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"old");
+        assert_eq!(std::fs::read(&tmp).unwrap(), b"new");
+        std::fs::remove_file(&dest).unwrap();
+        assert!(os::publish_no_replace(&tmp, &dest).unwrap().is_none());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        assert!(!tmp.exists());
+        os::sync_dir(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn hex_digit_ct_matches_hex_digit() {

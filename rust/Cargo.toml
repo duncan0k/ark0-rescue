@@ -30,7 +30,11 @@ test-trace = []
 # The command-line tools voleith-prove and voleith-verify (src/bin/). It adds
 # the prover and getrandom, which only voleith-prove uses: the library never
 # calls getrandom.
-cli = ["prover", "dep:getrandom"]
+cli = ["prover", "dep:getrandom", "dep:libc"]
+# Fault injection for tests/cli.rs only: a failing random source, failing
+# writes and removals, a fixed rho, and a panic inside prove, chosen by the
+# environment variable VOLEITH_FAULT. Never enable it in a real build.
+fault-injection = ["cli"]
 
 [dependencies]
 # Keccak-f[1600] (FIPS 202), the permutation of the `sha3` crate (which
@@ -47,6 +51,12 @@ zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 # "2026-10-23 tools and verifier-only build". 0.3.4 rather than 0.4.x: a year
 # old, MSRV 1.63, and the version most of the ecosystem runs. No features.
 getrandom = { version = "=0.3.4", default-features = false, optional = true }
+
+# voleith-prove only (feature `cli`): prctl, setrlimit, mlockall and
+# renameat2 (src/bin/common/os.rs). Already in Cargo.lock through
+# getrandom; the same exact version.
+[target.'cfg(unix)'.dependencies]
+libc = { version = "=0.2.190", default-features = false, optional = true }
 
 [dev-dependencies]
 # The reference for the SHAKE256 sponge of src/sym.rs (its test).

@@ -561,6 +561,9 @@ fn prove_impl(
         .update(&iv_pre)
         .finalize();
 
+    #[cfg(feature = "fault-injection")]
+    crate::fault::check();
+
     // Phase 2: VOLE consistency hash and witness commitment, chall2.
     let vh = VoleHash::<CtMul>::new(&chall1, ell);
     let u_tilde = vh.hash(&u);
