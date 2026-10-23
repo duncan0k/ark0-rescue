@@ -100,10 +100,16 @@ Crash dumps and reports, before anything is read (a failure exits 1):
   of the same user can still read the tool's memory while it runs.
   `--require-mlock` is a usage error on Windows: the machine is the trust
   boundary there, and paging is not a goal. Pages of the tool can reach
-  the paging file (`pagefile.sys`) and, on hibernation, `hiberfil.sys`;
-  both stay on that machine's disk. If they must not hold the seed even
-  there, turn hibernation off (`powercfg /hibernate off`) and keep the
-  system drive encrypted (BitLocker), which also covers the paging file.
+  a paging file (`pagefile.sys`) and, on hibernation, `hiberfil.sys`
+  (always on the system volume); all stay on that machine's disks. If
+  they must not hold the seed even there, turn hibernation off
+  (`powercfg /hibernate off`) and encrypt (BitLocker) every volume that
+  holds a paging file, not only the system volume: Windows can keep
+  paging files on several volumes. List them with
+  `Get-CimInstance Win32_PageFileUsage` in PowerShell, or in System
+  Properties → Advanced → Performance → Settings → Advanced → Virtual
+  memory, or confine the paging file to the encrypted system volume
+  there.
 
 Cleared in memory (zeroized when no longer needed, at the latest when
 `run()` returns, before the process exits):
