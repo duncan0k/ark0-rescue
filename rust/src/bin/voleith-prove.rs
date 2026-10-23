@@ -272,7 +272,33 @@ fn run() -> Result<(String, Vec<String>), Fail> {
     Ok((to_hex(&y), warnings))
 }
 
+/// The value of VOLEITH_ALLOW_FAULT_INJECTION under which a build with the
+/// test-only feature `fault-injection` runs at all.
+#[cfg(feature = "fault-injection")]
+const FAULT_INJECTION_ALLOWED: &str = "tests";
+
+/// A build with `fault-injection` can fix rho, bypass the OS random
+/// source and force a panic: it refuses to run, before reading any
+/// argument or input, unless the tests allow it explicitly.
+#[cfg(feature = "fault-injection")]
+fn refuse_fault_injection_build() -> bool {
+    if std::env::var("VOLEITH_ALLOW_FAULT_INJECTION").as_deref() == Ok(FAULT_INJECTION_ALLOWED) {
+        eprintln!("voleith-prove: warning: test build with fault injection; never use a real seed");
+        return false;
+    }
+    eprintln!(
+        "voleith-prove: this build has the test-only feature fault-injection and does not \
+         run (set VOLEITH_ALLOW_FAULT_INJECTION={FAULT_INJECTION_ALLOWED} in tests only); \
+         nothing read. Build with --features cli."
+    );
+    true
+}
+
 fn main() -> ExitCode {
+    #[cfg(feature = "fault-injection")]
+    if refuse_fault_injection_build() {
+        return ExitCode::from(1);
+    }
     match run() {
         Ok((y, warnings)) => {
             println!("y={y}");

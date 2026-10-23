@@ -146,6 +146,15 @@ for b in "${BINS[@]}"; do
   fi
   cp "$one" "$OUT/$b.exe"
 done
+# The features are exactly `cli` (above); as a second check, the string
+# that a build with the test-only feature fault-injection carries in its
+# refusal message must be absent.
+for b in "${BINS[@]}"; do
+  if strings -a "$OUT/$b.exe" | grep -q VOLEITH_ALLOW_FAULT_INJECTION; then
+    echo "$b.exe was built with fault-injection" >&2
+    status=1
+  fi
+done
 # Local paths left in the binaries (there should be none).
 # A path also counts with its separators turned into underscores, as in
 # dlltool's symbol names.

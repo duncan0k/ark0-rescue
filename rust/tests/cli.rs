@@ -75,6 +75,9 @@ fn run_env(
     if let Some(d) = cwd {
         cmd.current_dir(d);
     }
+    // Allows a build with the test-only feature fault-injection to run; the
+    // refusal test runs the binary without it.
+    cmd.env("VOLEITH_ALLOW_FAULT_INJECTION", "tests");
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -96,6 +99,14 @@ fn run_env(
         stdout: o.stdout,
         stderr: o.stderr,
     }
+}
+
+/// Standard error is empty, apart from the one warning line that a build
+/// with the test-only feature fault-injection prints when it runs.
+fn quiet(stderr: &[u8]) -> bool {
+    let warning: &[u8] =
+        b"voleith-prove: warning: test build with fault injection; never use a real seed\n";
+    stderr.is_empty() || (cfg!(feature = "fault-injection") && stderr == warning)
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -258,7 +269,7 @@ fn round_trip() {
             String::from_utf8_lossy(&p.stderr)
         );
         assert_eq!(p.stdout, format!("y={}\n", c.y_hex).as_bytes(), "form {i}");
-        assert!(p.stderr.is_empty(), "form {i}");
+        assert!(quiet(&p.stderr), "form {i}");
         let proof = std::fs::read(&out).unwrap();
         assert_eq!(proof.len(), len);
         assert_no_seed(&c.x_hex, &[&p.stdout, &p.stderr, &proof]);
@@ -676,4 +687,43 @@ fn require_mlock() {
         assert_eq!(p.code, 2, "{err}");
     }
     assert_no_seed(&c.x_hex, &[&p.stdout, &p.stderr]);
+}
+
+/// A build with the test-only feature fault-injection refuses to run
+/// without VOLEITH_ALLOW_FAULT_INJECTION=tests (or with another value): exit
+/// 1, a message on standard error, nothing read or written.
+#[cfg(feature = "fault-injection")]
+#[test]
+fn fault_injection_build_refuses_to_run() {
+    let c = case();
+    for value in [None, Some(""), Some("1"), Some("test"), Some("TESTS")] {
+        let dir = fresh_dir("refuse");
+        let mut cmd = Command::new(PROVE);
+        cmd.args(prove_args(&c, "proof.bin"))
+            .current_dir(&dir)
+            .env_remove("VOLEITH_ALLOW_FAULT_INJECTION")
+            .env("VOLEITH_FAULT", "rng")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(v) = value {
+            cmd.env("VOLEITH_ALLOW_FAULT_INJECTION", v);
+        }
+        let mut child = cmd.spawn().unwrap();
+        {
+            use std::io::Write;
+            let _ = child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(format!("{}\n", c.x_hex).as_bytes());
+        }
+        let o = child.wait_with_output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(1), "{value:?}: {err}");
+        assert!(o.stdout.is_empty());
+        assert!(err.contains("test-only feature fault-injection"), "{err}");
+        assert!(all_files(&dir).is_empty(), "{value:?}");
+        assert_no_seed(&c.x_hex, &[&o.stdout, &o.stderr]);
+    }
 }

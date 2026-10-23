@@ -33,7 +33,12 @@ target/cli/voleith-verify --k <ascii K> --suffix <0..255> --y-hex <64 hex> --msg
 
 The `cli` profile is the release profile with `panic = "abort"`: a panic
 ends the process at once. Build the tools with it (`build-windows.sh`
-does).
+does), and with `--features cli` only, never `--all-features`: the
+test-only feature `fault-injection` can fix `rho`, bypass the random
+source and force a panic. A binary built with it refuses to run (exit 1,
+nothing read) unless `VOLEITH_ALLOW_FAULT_INJECTION=tests` is set, which
+only the tests do; `build-windows.sh` checks that its binaries do not
+contain it.
 
 `voleith-prove`, in order:
 
