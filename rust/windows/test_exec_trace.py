@@ -11,9 +11,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import exec_trace as et  # noqa: E402
 
-RUSTC = "/root/.rustup/toolchains/1.97.0-x86_64-unknown-linux-gnu/bin/rustc"
+TC = "/root/.rustup/toolchains/1.97.0-x86_64-unknown-linux-gnu"
+RUSTC = TC + "/bin/rustc"
+PROXY = "/root/.cargo/bin/cargo"
+CARGO = TC + "/bin/cargo"
+BUILD = "/b/windows-build-1/cli/build"
 
 # Lines as strace 6.8 wrote them for build-windows.sh (arguments shortened).
+ROOT_EXEC = '5200  execve("%s", ["%s", "build"], 0x7ffd /* 9 vars */) = 0\n' % (PROXY, PROXY)
+ROOT_CARGO = '5200  execve("%s", ["%s"..., "build"], 0x5550 /* 14 vars */) = 0\n' % (CARGO, CARGO[:32])
 COMPLETE = ('5221  execve("/usr/bin/x86_64-w64-mingw32-dlltool", ["/usr/bin/x86_64-w64-mingw32-dllt"..., '
             '"-d", "/tmp/x"...], 0x55d0 /* 12 vars */) = 0\n')
 SPLIT = [
@@ -30,89 +36,174 @@ EXECVEAT_OK = ('5240  execveat(AT_FDCWD, "/usr/bin/x86_64-w64-mingw32-as", ["as"
                '= 0\n')
 EXECVEAT_FD = '5241  execveat(3, "", ["x"], 0x5604 /* 3 vars */, AT_EMPTY_PATH) = 0\n'
 EXECVEAT_REL = '5242  execveat(AT_FDCWD, "as", ["as"], 0x5605 /* 3 vars */, 0) = 0\n'
+CHILD_EXITS = ["5221  +++ exited with 0 +++\n", "5223  +++ exited with 0 +++\n",
+               "5224  +++ exited with 1 +++\n", "5240  +++ killed by SIGKILL +++\n"]
+ROOT_EXIT = "5200  +++ exited with 0 +++\n"
+
+ALLOW = [PROXY + "->/root/.cargo/bin/rustup", "/usr/bin/x86_64-w64-mingw32-dlltool",
+         "/usr/bin/x86_64-w64-mingw32-as"]
+LINKS = {PROXY: "/root/.cargo/bin/rustup"}
+
+
+def whole(middle=None):
+    """A complete log: the root's execs, `middle`, the children's exits and
+    the root's exit."""
+    if middle is None:
+        middle = SPLIT + [COMPLETE, FAILED, EXECVEAT_OK]
+    return [ROOT_EXEC, ROOT_CARGO] + middle + CHILD_EXITS + [ROOT_EXIT]
+
+
+def run_check(lines, expect=(CARGO, RUSTC), allow=ALLOW, prefixes=(TC,), build_dirs=(BUILD,), real=None):
+    return et.check(lines, PROXY, list(expect), list(allow), list(prefixes), list(build_dirs),
+                    real or (lambda p: LINKS.get(p, os.path.normpath(p))))
 
 
 class Parse(unittest.TestCase):
     def test_complete_line(self):
-        self.assertEqual(et.parse([COMPLETE]), (["/usr/bin/x86_64-w64-mingw32-dlltool"], []))
+        log = et.parse([COMPLETE])
+        self.assertEqual([p for _, p, _ in log.ran], ["/usr/bin/x86_64-w64-mingw32-dlltool"])
+        self.assertEqual(log.errors, [])
 
     def test_split_lines_are_joined_per_pid(self):
-        ran, errors = et.parse(SPLIT)
-        self.assertEqual(errors, [])
-        self.assertEqual(ran, [RUSTC, RUSTC])
+        log = et.parse(SPLIT)
+        self.assertEqual(log.errors, [])
+        self.assertEqual([p for _, p, _ in log.ran], [RUSTC, RUSTC])
 
     def test_split_failed_exec_is_not_a_run(self):
-        lines = [SPLIT[0], "5223  <... execve resumed>)             = -1 EACCES (Permission denied)\n"]
-        self.assertEqual(et.parse(lines), ([], []))
+        log = et.parse([SPLIT[0], "5223  <... execve resumed>)             = -1 EACCES (Permission denied)\n"])
+        self.assertEqual((log.ran, log.errors), ([], []))
 
     def test_failed_exec_is_not_a_run(self):
-        self.assertEqual(et.parse([FAILED]), ([], []))
+        log = et.parse([FAILED])
+        self.assertEqual((log.ran, log.errors), ([], []))
 
     def test_execveat(self):
-        self.assertEqual(et.parse([EXECVEAT_OK]), (["/usr/bin/x86_64-w64-mingw32-as"], []))
+        self.assertEqual([p for _, p, _ in et.parse([EXECVEAT_OK]).ran], ["/usr/bin/x86_64-w64-mingw32-as"])
         for line in (EXECVEAT_FD, EXECVEAT_REL):
-            ran, errors = et.parse([line])
+            errors = et.parse([line]).errors
             self.assertEqual(len(errors), 1, line)
             self.assertIn("does not name the program", errors[0])
 
     def test_split_execveat(self):
-        lines = ['7  execveat(AT_FDCWD, "/bin/true", ["true"], 0x1 /* 1 var */, 0 <unfinished ...>\n',
-                 "7  <... execveat resumed>) = 0\n"]
-        self.assertEqual(et.parse(lines), (["/bin/true"], []))
+        log = et.parse(['7  execveat(AT_FDCWD, "/bin/true", ["true"], 0x1 /* 1 var */, 0 <unfinished ...>\n',
+                        "7  <... execveat resumed>) = 0\n"])
+        self.assertEqual(([p for _, p, _ in log.ran], log.errors), (["/bin/true"], []))
+
+    def test_exit_lines(self):
+        log = et.parse(CHILD_EXITS + ["9  +++ killed by SIGSEGV (core dumped) +++\n",
+                                      "9  +++ superseded by execve in pid 8 +++\n"])
+        self.assertEqual(log.errors, [])
+        self.assertEqual(len(log.exits), 5)
 
     def test_unparsable_lines_fail(self):
         bad = [
             "garbage\n",
             '5250  execve("/usr/bin/a\\"b", ["x"], 0x1 /* 1 var */) = 0\n',  # escaped path
             '5251  execve("/usr/bin/x", ["x"], 0x1 /* 1 var */) = ?\n',      # no result
-            "5252  +++ exited with 0 +++\n",
+            "5252  +++ exited with x +++\n",
             '5253  open("/etc/passwd", O_RDONLY) = 3\n',
             '5254  execve("/usr/bin/x", ["x"]',                                # cut off
+            "5255  --- SIGCHLD {si_signo=SIGCHLD} ---\n",
+            "strace: /dev/full: No space left on device\n",
         ]
         for line in bad:
-            ran, errors = et.parse([line])
-            self.assertTrue(errors, line)
-            self.assertEqual(ran, [], line)
+            log = et.parse([line])
+            self.assertTrue(log.errors, line)
+            self.assertEqual(log.ran, [], line)
 
     def test_unpaired_split_lines_fail(self):
-        self.assertTrue(et.parse([SPLIT[0]])[1])  # never resumed
-        self.assertTrue(et.parse([SPLIT[2]])[1])  # resumed without start
-        self.assertTrue(et.parse([SPLIT[0], SPLIT[0]])[1])  # two unfinished
-        mixed = [SPLIT[0], "5223  <... execveat resumed>) = 0\n"]
-        self.assertTrue(et.parse(mixed)[1])
-
-    def test_blank_lines_are_ignored(self):
-        self.assertEqual(et.parse(["\n", COMPLETE, "\n"])[1], [])
+        self.assertTrue(et.parse([SPLIT[0]]).errors)  # never resumed
+        self.assertTrue(et.parse([SPLIT[2]]).errors)  # resumed without start
+        self.assertTrue(et.parse([SPLIT[0], SPLIT[0]]).errors)  # two unfinished
+        self.assertTrue(et.parse([SPLIT[0], "5223  <... execveat resumed>) = 0\n"]).errors)
 
 
-class Check(unittest.TestCase):
-    LOG = SPLIT + [COMPLETE, FAILED, EXECVEAT_OK]
-
-    def test_allowed(self):
-        progs, errors = et.check(
-            self.LOG,
-            {"/usr/bin/x86_64-w64-mingw32-dlltool", "/usr/bin/x86_64-w64-mingw32-as"},
-            ["/root/.rustup/toolchains/1.97.0-x86_64-unknown-linux-gnu"], [])
+class Complete(unittest.TestCase):
+    def test_whole_log_passes(self):
+        progs, errors = run_check(whole())
         self.assertEqual(errors, [])
-        self.assertEqual(len(progs), 3)
+        self.assertEqual(len(progs), 5)
 
-    def test_disallowed_program_fails(self):
-        progs, errors = et.check(self.LOG, {"/usr/bin/x86_64-w64-mingw32-dlltool"},
-                                 ["/root/.rustup/toolchains/1.97.0-x86_64-unknown-linux-gnu"], [])
-        self.assertEqual(errors, ["ran /usr/bin/x86_64-w64-mingw32-as, which is not allowed"])
+    def test_empty_log(self):
+        for lines in ([], ["\n", "\n"]):
+            errors = run_check(lines)[1]
+            self.assertIn("the log is empty", errors)
 
-    def test_prefix_is_a_directory(self):
-        # /root/.rustup/toolchains/1.97.0-x86_64-unknown-linux-gnu-evil is not under the prefix.
-        log = ['1  execve("/root/.rustup/toolchains/1.97.0-x86_64-unknown-linux-gnu-evil/rustc", [], 0x1) = 0\n']
-        errors = et.check(log, set(), ["/root/.rustup/toolchains/1.97.0-x86_64-unknown-linux-gnu"], [])[1]
-        self.assertTrue(errors)
+    def test_cut_after_any_complete_line(self):
+        log = whole()
+        for k in range(1, len(log)):  # every prefix that ends before the root's exit
+            errors = run_check(log[:k])[1]
+            self.assertTrue(any("does not end with the exit" in e or "never resumed" in e for e in errors),
+                            "cut after line %d passed" % k)
 
-    def test_glob(self):
-        log = ['1  execve("/b/windows-build-1/cli/build/getrandom-ab12/build-script-build", [], 0x1) = 0\n']
-        self.assertEqual(et.check(log, set(), [], ["/b/windows-build-1/*/build/*/build-script-build"])[1], [])
+    def test_without_the_roots_exit(self):
+        errors = run_check(whole()[:-1])[1]
+        self.assertTrue(any("does not end with the exit (0) of the root process 5200" in e for e in errors))
 
-    def test_a_failed_exec_of_anything_is_fine(self):
-        self.assertEqual(et.check([FAILED], set(), [], []), ([], []))
+    def test_root_exit_not_last_or_not_zero(self):
+        log = whole()
+        errors = run_check(log[:-1] + ["5200  +++ exited with 101 +++\n"])[1]
+        self.assertTrue(any("does not end with the exit" in e for e in errors))
+        errors = run_check(log[:-1] + [ROOT_EXIT, COMPLETE])[1]
+        self.assertTrue(any("does not end with the exit" in e for e in errors))
+
+    def test_first_line_must_be_the_roots_exec(self):
+        errors = run_check(whole()[1:])[1]
+        self.assertIn("the log does not start with the exec of %s" % PROXY, errors)
+        errors = run_check([FAILED] + whole())[1]
+        self.assertIn("the log does not start with the exec of %s" % PROXY, errors)
+
+    def test_expected_programs_must_run(self):
+        errors = run_check(whole([COMPLETE]))[1]
+        self.assertIn("expected %s to run, it did not" % RUSTC, errors)
+
+
+class Paths(unittest.TestCase):
+    def run_one(self, path, real=None):
+        line = '6000  execve("%s", ["x"], 0x1 /* 1 var */) = 0\n' % path
+        return run_check(whole(SPLIT + [line, "6000  +++ exited with 0 +++\n"]), real=real)[1]
+
+    def test_review_examples(self):
+        for p in ("/root/.rustup/toolchains/1.97.0-x86_64-unknown-linux-gnu/../../evil",
+                  "/b/windows-build-1/../../evil/build/x/build-script-build",
+                  "/b/windows-build-1/cli/build/../../../evil/build/x/build-script-build"):
+            errors = self.run_one(p)
+            self.assertTrue(any(p in e and "component" in e for e in errors), (p, errors))
+
+    def test_bad_components(self):
+        for p in ("usr/bin/as", "/usr//bin/as", "/usr/bin/./as", "/usr/bin/as/", TC + "/./bin/rustc"):
+            self.assertTrue(any("component" in e or "not absolute" in e for e in self.run_one(p)), p)
+
+    def test_build_script_layout(self):
+        self.assertEqual(self.run_one(BUILD + "/getrandom-a39b601e21c5b728/build-script-build"), [])
+        for p in (BUILD + "/a/b/build-script-build",            # two components
+                  BUILD + "/build-script-build",                # none
+                  BUILD + "/x/build-script-build-2",            # another name
+                  "/b/windows-build-1/other/build/x/build-script-build"):
+            self.assertTrue(any("not allowed" in e for e in self.run_one(p)), p)
+
+    def test_prefix_is_a_whole_directory(self):
+        self.assertTrue(any("not allowed" in e for e in self.run_one(TC + "-evil/rustc")))
+
+    def test_resolved_path_must_stay_in_place(self):
+        # A symlink inside the toolchain that points outside it.
+        links = dict(LINKS, **{TC + "/bin/link": "/evil/rustc"})
+        real = lambda p: links.get(p, os.path.normpath(p))  # noqa: E731
+        errors = self.run_one(TC + "/bin/link", real=real)
+        self.assertTrue(any("not allowed" in e for e in errors), errors)
+        # An allowed tool that has become a link elsewhere.
+        links = dict(LINKS, **{"/usr/bin/x86_64-w64-mingw32-as": "/tmp/evil-as"})
+        errors = run_check(whole(), real=lambda p: links.get(p, os.path.normpath(p)))[1]
+        self.assertTrue(any("x86_64-w64-mingw32-as, which is not allowed" in e for e in errors), errors)
+
+    def test_link_entries(self):
+        # The proxy must resolve to rustup; resolving elsewhere fails.
+        links = {PROXY: "/tmp/evil-cargo"}
+        errors = run_check(whole(), real=lambda p: links.get(p, os.path.normpath(p)))[1]
+        self.assertTrue(any(PROXY + ", which is not allowed" in e for e in errors), errors)
+
+    def test_failed_exec_of_anything_is_fine(self):
+        self.assertEqual(run_check(whole(SPLIT + [FAILED.replace("/root/.cargo/bin/cc", "/../x")]))[1], [])
 
 
 if __name__ == "__main__":

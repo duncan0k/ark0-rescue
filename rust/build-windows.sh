@@ -20,11 +20,13 @@
 #   versions are recorded, not required: the build script only prints cfg
 #   lines). A tool that is a symbolic link must resolve to a file of the
 #   same package.
-# Both builds run under strace (execve and execveat, with -f), and
-# windows/exec_trace.py fails the build if any program other than these,
-# the toolchain's own and the build scripts ran, or if any line of the
-# trace cannot be parsed (split unfinished/resumed lines are joined per
-# PID). strace (/usr/bin/strace, package strace) is required: without it
+# Both builds run under strace (execve and execveat, with -f, exits
+# written), and windows/exec_trace.py fails the build if any program other
+# than these, the toolchain's own and the build scripts ran, if any line
+# of the trace cannot be parsed (split unfinished/resumed lines are joined
+# per PID), or if the trace is incomplete (it must start with cargo's exec
+# and end with its exit 0). strace's exit status and standard error must
+# be 0 and empty. strace (/usr/bin/strace, package strace) is required: without it
 # the script refuses, unless --unpublished says that the hashes of this
 # build will not be published.
 # cargo runs under `env -i` with a fixed environment: RUSTUP_TOOLCHAIN,
@@ -222,22 +224,43 @@ build() { # n
   local trace=()
   if [ "$TRACED" = 1 ]; then
     mkdir -p "$tdir"
-    trace=("$STRACE" -f -qq -e trace=execve,execveat -e signal=none -o "$tdir/exec.log")
+    # --quiet=attach,personality (-q, not -qq): exit lines are written,
+    # and exec_trace.py needs the root's `+++ exited with 0 +++`.
+    trace=("$STRACE" -f --quiet=attach,personality -e trace=execve,execveat
+      -e signal=none -o "$tdir/exec.log")
   fi
-  clean "CARGO_ENCODED_RUSTFLAGS=$encoded" \
-    "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=$LINKER" \
-    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$HOST_CC" \
-    "${trace[@]}" "$CARGO" build --quiet --locked --profile cli --features cli --target "$TARGET" \
-    --manifest-path "$HERE/Cargo.toml" --target-dir "$tdir" "${bin_args[@]}"
-  if [ "$TRACED" = 1 ]; then
-    # Every program the build executed: the toolchain's, the build
-    # scripts', or one of TOOLS; any unreadable line fails.
-    local allow=(--allow "$CARGO" --allow-prefix "$TOOLCHAIN_DIR"
-      --allow-glob "$tdir/*/build/*/build-script-build")
-    for t in "${TOOLS[@]}"; do allow+=(--allow "${t%%|*}"); done
-    "$PYTHON" -I "$HERE/windows/exec_trace.py" "$tdir/exec.log" "${allow[@]}" ||
-      refuse "build $1 ran a program that is not allowed, or its trace cannot be read"
+  local cmd=(clean "CARGO_ENCODED_RUSTFLAGS=$encoded"
+    "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=$LINKER"
+    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$HOST_CC"
+    "${trace[@]}" "$CARGO" build --quiet --locked --profile cli --features cli --target "$TARGET"
+    --manifest-path "$HERE/Cargo.toml" --target-dir "$tdir" "${bin_args[@]}")
+  if [ "$TRACED" = 0 ]; then
+    "${cmd[@]}"
+    return
   fi
+  # strace exits with cargo's status, but reports its own errors (a log it
+  # cannot write: a full disk, an I/O error) only on standard error and
+  # may still exit 0. Standard error, which cargo --quiet leaves empty on
+  # success, must therefore be empty, and the status 0.
+  local rc=0
+  "${cmd[@]}" 2> "$tdir/stderr.txt" || rc=$?
+  if [ "$rc" -ne 0 ] || [ -s "$tdir/stderr.txt" ]; then
+    cat "$tdir/stderr.txt" >&2
+    refuse "build $1 under strace exited $rc or wrote to standard error"
+  fi
+  # Every program the build executed: the toolchain's, the build
+  # scripts', or one of TOOLS; the log must be complete (the root's exec
+  # first, its exit 0 last, cargo, rustc and the linker run) and every
+  # line readable.
+  local allow=(--root "$CARGO" --allow "$CARGO->$CARGO_HOME/bin/rustup"
+    --expect "$TOOLCHAIN_DIR/bin/cargo" --expect "$TOOLCHAIN_DIR/bin/rustc" --expect "$LINKER"
+    --allow-prefix "$TOOLCHAIN_DIR" --allow-build-scripts "$tdir/cli/build")
+  for t in "${TOOLS[@]}"; do
+    f=${t%%|*}
+    allow+=(--allow "$f->$(readlink -f "$f")")
+  done
+  "$PYTHON" -I "$HERE/windows/exec_trace.py" "$tdir/exec.log" "${allow[@]}" ||
+    refuse "build $1: the exec trace is incomplete, unreadable or shows a program that is not allowed"
 }
 
 build 1
