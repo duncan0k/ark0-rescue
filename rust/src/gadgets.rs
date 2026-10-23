@@ -346,7 +346,14 @@ mod tests {
             let (vals, _, ok) = circ.evaluate(&[], &bits_of_words(&words));
             assert!(ok);
             let out: Vec<u8> = circ.outputs.iter().map(|&w| vals[w as usize]).collect();
-            assert_eq!(out, bits_of_words(&sha256::compress(&state, &block)));
+            assert_eq!(
+                out,
+                bits_of_words(&{
+                    let mut st = state;
+                    sha256::compress(&mut st, &block);
+                    st
+                })
+            );
         }
     }
 
@@ -389,7 +396,7 @@ mod tests {
         let tags: Vec<u128> = wit.iter().map(|_| rand()).collect();
         let keys: Vec<u128> = tags
             .iter()
-            .zip(&wit)
+            .zip(wit.iter())
             .map(|(&t, &w)| t ^ (delta & 0u128.wrapping_sub(w as u128)))
             .collect();
         let (mut a0, mut a1, mut bt) = (Vec::new(), Vec::new(), Vec::new());

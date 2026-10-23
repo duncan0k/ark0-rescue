@@ -33,9 +33,11 @@ test-trace = []
 cli = ["prover", "dep:getrandom"]
 
 [dependencies]
-# SHAKE256 (FIPS 202); see NOTES.md. Its `zeroize` feature clears the Keccak
-# state when a hasher or XOF reader is dropped.
-sha3 = { version = "=0.10.9", default-features = false, features = ["zeroize"] }
+# Keccak-f[1600] (FIPS 202), the permutation of the `sha3` crate (which
+# depends on this same version). src/sym.rs builds SHAKE256 on it, so that
+# no buffer outside its zeroized state holds absorbed input or output; see
+# NOTES.md, "2026-10-23 tools and verifier-only build".
+keccak = { version = "=0.1.6", default-features = false }
 # Clearing the prover's secrets (rust/CT-AUDIT.md). 1.8.2 rather than 1.9.x:
 # over a year old, MSRV 1.60, inside sha3's `^1.6` range, and without the
 # `optimization_barrier` code that 1.9.0 introduced and 1.9.1 had to fix.
@@ -47,6 +49,8 @@ zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 getrandom = { version = "=0.3.4", default-features = false, optional = true }
 
 [dev-dependencies]
+# The reference for the SHAKE256 sponge of src/sym.rs (its test).
+sha3 = { version = "=0.10.9", default-features = false }
 # Reading the JSON test vectors.
 serde_json = "=1.0.149"
 # BIP-340 Schnorr baseline in the benchmark (bundled libsecp256k1).
@@ -63,6 +67,14 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "unwind"
+
+# The command-line tools (`cargo build --profile cli --features cli`, and
+# build-windows.sh): release, but a panic ends the process at once instead
+# of unwinding past the prover's stack scrub. The library itself keeps
+# `panic = "unwind"`, which its C ABI relies on (catch_unwind).
+[profile.cli]
+inherits = "release"
+panic = "abort"
 
 # Tests verify 130.2 kB proofs: optimise them, keep debug assertions and
 # overflow checks.

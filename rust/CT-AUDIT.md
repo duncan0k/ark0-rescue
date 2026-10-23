@@ -145,13 +145,28 @@ the scrub (a callee) cannot reach.
   and registers or vector registers can hold secrets until reused. Signal
   handlers and other threads are out of scope.
 - **A panic skips the stack scrub.** A panic inside `prove_impl` unwinds past
-  `scrub_stack` (release builds keep `panic = "unwind"`). Heap secrets are
-  still cleared by their destructors during unwinding; the stack is not.
-- **`digest 0.10`'s block buffer** (up to 135 bytes of absorbed input, e.g.
-  the witness absorbed into `rnd`) and the XOF reader's output buffer (e.g.
-  the tail of the root-seed output) have no zeroize support. They live in
-  the prover's stack frames, so only the stack scrub covers them. Moving to
-  `sha3 0.11` / `digest 0.11` or a self-owned Keccak would close this.
+  `scrub_stack` when the library is built with `panic = "unwind"` (the
+  release profile, for the C ABI). Heap secrets are still cleared by their
+  destructors during unwinding; the stack is not. The command-line tools
+  are built with the `cli` profile (`panic = "abort"`, 2026-10-23): a panic
+  there ends the process at once, before any further code runs.
+- **Keccak permutation temporaries.** Since 2026-10-23, `src/sym.rs`
+  implements the SHAKE256 sponge itself on `keccak::f1600`: input is XORed
+  into the state and output read from it in place, the state is zeroized
+  on drop, and an `Xof` is not moved once it has absorbed data. This closes
+  the earlier gap of `digest 0.10`'s block buffer and the XOF reader's
+  output buffer, which had no zeroize support. What remains are the
+  permutation's own locals inside `keccak::f1600` (stack and registers),
+  which only the stack scrub covers.
+- **Other stack and register copies.** Values returned or passed by value
+  (e.g. a 16-byte seed read from a slice, the SHA-256 working variables
+  `a..h`) can leave copies in stack slots and registers; the stack scrub
+  covers the stack below `prove_scrubbed`, best effort. Since 2026-10-23
+  SHA-256 compresses into its chaining value in place, finalizes by
+  reference, and HMAC writes its inner digest into a zeroizing buffer; the
+  GGM tree writes child and leaf seeds straight into their final slots;
+  `Circuit::evaluate` returns zeroizing vectors allocated at their final
+  size.
 - **Caller-owned inputs.** `witness` and `rho` belong to the caller, who must
   clear them.
 - **Paging and core dumps.** Swapped-out pages, core dumps and hibernation

@@ -257,16 +257,22 @@ impl Circuit {
 
     /// Evaluate in the clear. Returns every wire value, the witness bits and
     /// whether every ASSERT holds. The work and the memory accesses depend
-    /// only on the instruction list, never on the wire values.
+    /// only on the instruction list, never on the wire values. Both vectors
+    /// hold secrets and are zeroizing from their allocation on, at their
+    /// final capacity, so no reallocation leaves a copy behind.
     #[cfg(feature = "prover")]
-    pub fn evaluate(&self, public_bits: &[u8], secret_bits: &[u8]) -> (Vec<u8>, Vec<u8>, bool) {
+    pub fn evaluate(
+        &self,
+        public_bits: &[u8],
+        secret_bits: &[u8],
+    ) -> (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>, bool) {
         assert_eq!(public_bits.len(), self.n_public, "public input length");
         assert_eq!(secret_bits.len(), self.n_secret, "secret input length");
-        let mut vals: Vec<u8> = Vec::with_capacity(self.n_wires);
+        let mut vals = Zeroizing::new(Vec::<u8>::with_capacity(self.n_wires));
         vals.extend_from_slice(&[0, 1]);
         vals.extend_from_slice(public_bits);
         vals.extend_from_slice(secret_bits);
-        let mut witness: Vec<u8> = Vec::with_capacity(self.n_witness);
+        let mut witness = Zeroizing::new(Vec::<u8>::with_capacity(self.n_witness));
         witness.extend_from_slice(secret_bits);
         // OR of (a & b) ^ c over every ASSERT: no branch on wire values.
         let mut bad = 0u8;
@@ -294,6 +300,9 @@ impl Circuit {
                 }
             }
         }
+        // Filled exactly to the capacities above: nothing was reallocated.
+        debug_assert_eq!(vals.len(), self.n_wires);
+        debug_assert_eq!(witness.len(), self.n_witness);
         (vals, witness, bad == 0)
     }
 

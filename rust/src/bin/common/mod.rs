@@ -137,14 +137,16 @@ fn hex_digit_ct(c: u8) -> (u8, u8) {
     (val, is_d | is_l)
 }
 
-/// The 32-byte seed from `r`: exactly 64 hexadecimal digits, then nothing,
-/// "\n" or "\r\n", then end of input. Reads at most 67 bytes. The error
-/// never contains the input; every buffer that held it is cleared.
-pub fn read_seed(r: &mut impl Read) -> Result<Zeroizing<[u8; 32]>, String> {
+/// The 32-byte seed from `r` into `x`: exactly 64 hexadecimal digits, then
+/// nothing, "\n" or "\r\n", then end of input. Reads at most 67 bytes into
+/// a zeroizing buffer and decodes in place into the caller's `x`; on error
+/// `x` is all zero. The error never contains the input.
+pub fn read_seed(r: &mut impl Read, x: &mut [u8; 32]) -> Result<(), String> {
     const CAP: usize = 67;
     let err = || {
         "standard input must be exactly 64 hexadecimal digits and an optional newline".to_string()
     };
+    x.fill(0);
     let mut buf = Zeroizing::new([0u8; CAP]);
     let mut n = 0;
     while n < CAP {
@@ -164,7 +166,6 @@ pub fn read_seed(r: &mut impl Read) -> Result<Zeroizing<[u8; 32]>, String> {
     if !ok_end {
         return Err(err());
     }
-    let mut x = Zeroizing::new([0u8; 32]);
     let mut valid = 1u8;
     for (i, xi) in x.iter_mut().enumerate() {
         let (hi, vh) = hex_digit_ct(buf[2 * i]);
@@ -173,9 +174,10 @@ pub fn read_seed(r: &mut impl Read) -> Result<Zeroizing<[u8; 32]>, String> {
         valid &= vh & vl;
     }
     if valid != 1 {
+        x.fill(0);
         return Err(err());
     }
-    Ok(x)
+    Ok(())
 }
 
 /// Standard input as an unbuffered file, so that no copy of what is read

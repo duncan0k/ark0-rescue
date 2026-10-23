@@ -62,7 +62,7 @@ build() { # n
   CARGO_ENCODED_RUSTFLAGS="$encoded" \
     CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
     SOURCE_DATE_EPOCH=0 \
-    cargo build --quiet --locked --release --features cli --target "$TARGET" \
+    cargo build --quiet --locked --profile cli --features cli --target "$TARGET" \
     --manifest-path "$HERE/Cargo.toml" --target-dir "$tdir" "${bin_args[@]}"
 }
 
@@ -71,8 +71,8 @@ build 2
 mkdir -p "$OUT"
 status=0
 for b in "${BINS[@]}"; do
-  one=$HERE/target/windows-build-1/$TARGET/release/$b.exe
-  two=$HERE/target/windows-build-2/$TARGET/release/$b.exe
+  one=$HERE/target/windows-build-1/$TARGET/cli/$b.exe
+  two=$HERE/target/windows-build-2/$TARGET/cli/$b.exe
   if cmp -s "$one" "$two"; then
     echo "$b.exe: the two builds are identical"
   else

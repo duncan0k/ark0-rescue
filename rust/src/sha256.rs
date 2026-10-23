@@ -21,8 +21,9 @@ pub const IV: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ];
 
-/// SHA-256 compression of one 64-byte block under chaining value `state`.
-pub fn compress(state: &[u32; 8], block: &[u8; 64]) -> [u32; 8] {
+/// SHA-256 compression of one 64-byte block into chaining value `state`,
+/// in place.
+pub fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut w = [0u32; 64];
     for (t, chunk) in block.chunks_exact(4).enumerate() {
         w[t] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
@@ -56,14 +57,11 @@ pub fn compress(state: &[u32; 8], block: &[u8; 64]) -> [u32; 8] {
         b = a;
         a = t1.wrapping_add(t2);
     }
-    let out = [a, b, c, d, e, f, g, h];
-    let mut res = [0u32; 8];
-    for i in 0..8 {
-        res[i] = state[i].wrapping_add(out[i]);
+    for (s, v) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+        *s = s.wrapping_add(v);
     }
     // The message schedule holds the block (the witness, in the prover).
     w.zeroize();
-    res
 }
 
 /// Incremental SHA-256. The chaining value and the buffered input are
@@ -104,22 +102,20 @@ impl Sha256 {
             if self.buf_len < 64 {
                 return;
             }
-            self.state = compress(&self.state, &self.buf);
+            compress(&mut self.state, &self.buf);
             self.buf_len = 0;
         }
         let mut blocks = data.chunks_exact(64);
         for block in &mut blocks {
-            let mut b = [0u8; 64];
-            b.copy_from_slice(block);
-            self.state = compress(&self.state, &b);
-            b.zeroize();
+            compress(&mut self.state, block.try_into().expect("64 bytes"));
         }
         let rest = blocks.remainder();
         self.buf[..rest.len()].copy_from_slice(rest);
         self.buf_len = rest.len();
     }
 
-    pub fn finalize(mut self) -> [u8; 32] {
+    /// Write the digest to `out`. The hasher is spent: only drop it after.
+    pub fn finalize_into(&mut self, out: &mut [u8; 32]) {
         let bit_len = self.total.wrapping_mul(8);
         let mut pad = [0u8; 72];
         pad[0] = 0x80;
@@ -131,10 +127,15 @@ impl Sha256 {
         pad[pad_len..pad_len + 8].copy_from_slice(&bit_len.to_be_bytes());
         self.update(&pad[..pad_len + 8]);
         debug_assert_eq!(self.buf_len, 0);
-        let mut out = [0u8; 32];
-        for (i, w) in self.state.iter().enumerate() {
-            out[4 * i..4 * i + 4].copy_from_slice(&w.to_be_bytes());
+        for (o, w) in out.chunks_exact_mut(4).zip(self.state.iter()) {
+            o.copy_from_slice(&w.to_be_bytes());
         }
+    }
+
+    /// The digest (public data; for secret data use `finalize_into`).
+    pub fn finalize(&mut self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        self.finalize_into(&mut out);
         out
     }
 }
@@ -158,10 +159,10 @@ fn key_block(key: &[u8], pad: u8) -> [u8; 64] {
 /// `key` must be at most 64 bytes.
 pub fn hmac_midstates(key: &[u8]) -> ([u32; 8], [u32; 8]) {
     debug_assert!(key.len() <= 64);
-    (
-        compress(&IV, &key_block(key, 0x36)),
-        compress(&IV, &key_block(key, 0x5c)),
-    )
+    let (mut iv_in, mut iv_out) = (IV, IV);
+    compress(&mut iv_in, &key_block(key, 0x36));
+    compress(&mut iv_out, &key_block(key, 0x5c));
+    (iv_in, iv_out)
 }
 
 /// HMAC-SHA256 (RFC 2104). Keys longer than one block are hashed first.
@@ -173,13 +174,18 @@ pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     } else {
         key
     };
+    // `msg` may be secret (x || suffix in the prover and voleith-prove):
+    // the inner hasher is updated and read in place and zeroized when
+    // dropped, and the inner digest is written into a zeroizing buffer.
     let mut inner = Sha256::default();
     inner.update(&key_block(key, 0x36));
     inner.update(msg);
-    let ih = Zeroizing::new(inner.finalize());
+    let mut ih = Zeroizing::new([0u8; 32]);
+    inner.finalize_into(&mut ih);
+    drop(inner);
     let mut outer = Sha256::default();
     outer.update(&key_block(key, 0x5c));
-    outer.update(&*ih);
+    outer.update(&ih[..]);
     outer.finalize()
 }
 
@@ -235,14 +241,16 @@ mod tests {
         block[..33].copy_from_slice(&msg);
         block[33] = 0x80;
         block[56..].copy_from_slice(&((64 + 33) as u64 * 8).to_be_bytes());
-        let inner = compress(&iv_in, &block);
+        let mut inner = iv_in;
+        compress(&mut inner, &block);
         let mut ob = [0u8; 64];
         for (i, w) in inner.iter().enumerate() {
             ob[4 * i..4 * i + 4].copy_from_slice(&w.to_be_bytes());
         }
         ob[32] = 0x80;
         ob[56..].copy_from_slice(&((64 + 32) as u64 * 8).to_be_bytes());
-        let outer = compress(&iv_out, &ob);
+        let mut outer = iv_out;
+        compress(&mut outer, &ob);
         let mut y = [0u8; 32];
         for (i, w) in outer.iter().enumerate() {
             y[4 * i..4 * i + 4].copy_from_slice(&w.to_be_bytes());

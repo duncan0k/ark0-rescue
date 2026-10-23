@@ -60,7 +60,8 @@ fn run() -> Result<String, Fail> {
 
     let mut stdin =
         common::raw_stdin().map_err(|_| Fail::Other("cannot open standard input".into()))?;
-    let x = read_seed(&mut stdin).map_err(Fail::Usage)?;
+    let mut x = Zeroizing::new([0u8; 32]);
+    read_seed(&mut stdin, &mut x).map_err(Fail::Usage)?;
 
     // y = HMAC-SHA256(K, x || suffix); the copy of x is cleared on drop.
     let mut m = Zeroizing::new([0u8; 33]);

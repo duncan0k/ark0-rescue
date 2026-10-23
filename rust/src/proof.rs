@@ -500,22 +500,20 @@ fn prove_impl(
     // vc::Tree, ConvertScratch, ZkAcc) and is allocated at its final size,
     // so no reallocation leaves a copy behind.
     let secret_bits = Zeroizing::new(statements::s1_secret_bits(witness));
-    let (wires, w_bits, ok) = circ.evaluate(&public_bits, &secret_bits);
-    let (_wires, w_bits) = (Zeroizing::new(wires), Zeroizing::new(w_bits));
+    let (_wires, w_bits, ok) = circ.evaluate(&public_bits, &secret_bits);
     if !ok {
         return Err(ProveError::RelationFails);
     }
 
     // Phase 1: randomness, IV, VOLE commitment, chall1.
     let mu = compute_mu(statement_id, public_inputs, message);
-    let rnd: Zeroizing<[u8; 32]> = Zeroizing::new(
-        Xof::new(Tag::Rnd)
-            .update(&(witness.len() as u16).to_le_bytes())
-            .update(witness)
-            .update(&mu)
-            .update(rho)
-            .finalize(),
-    );
+    let mut rnd = Zeroizing::new([0u8; 32]);
+    Xof::new(Tag::Rnd)
+        .update(&(witness.len() as u16).to_le_bytes())
+        .update(witness)
+        .update(&mu)
+        .update(rho)
+        .finalize_into(&mut rnd[..]);
     let r: &[u8] = &rnd[..16];
     let iv_pre = arr16(&rnd[16..]);
     let iv: [u8; 16] = Xof::new(Tag::Iv).update(&iv_pre).update(&mu).finalize();

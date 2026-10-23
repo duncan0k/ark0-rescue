@@ -8,6 +8,7 @@
 
 use crate::params::{COM_BYTES, MAX_DEPTH, MAX_LEAVES, SEED_BYTES};
 use crate::sym::{Tag, Xof};
+#[cfg(feature = "prover")]
 use zeroize::Zeroize;
 
 pub type Seed = [u8; SEED_BYTES];
@@ -18,39 +19,31 @@ pub const fn opening_len(depth: usize) -> usize {
     depth * SEED_BYTES + COM_BYTES
 }
 
-/// Children of node n: SHAKE256[ggm](iv || u8(i) || u16le(n) || seed_n, 32).
+/// Children of node n: SHAKE256[ggm](iv || u8(i) || u16le(n) || seed_n, 32),
+/// read straight into `nodes[2n]` and `nodes[2n + 1]`.
 #[inline]
-fn expand(iv: &[u8; 16], tree: u8, node: usize, seed: &Seed) -> (Seed, Seed) {
-    let mut out: [u8; 2 * SEED_BYTES] = Xof::new(Tag::Ggm)
-        .update(iv)
+fn expand(iv: &[u8; 16], tree: u8, n: usize, nodes: &mut [Seed]) {
+    let (lo, hi) = nodes.split_at_mut(2 * n);
+    let mut x = Xof::new(Tag::Ggm);
+    x.update(iv)
         .update(&[tree])
-        .update(&(node as u16).to_le_bytes())
-        .update(seed)
-        .finalize();
-    let mut l = [0u8; SEED_BYTES];
-    let mut r = [0u8; SEED_BYTES];
-    l.copy_from_slice(&out[..SEED_BYTES]);
-    r.copy_from_slice(&out[SEED_BYTES..]);
-    out.zeroize();
-    (l, r)
+        .update(&(n as u16).to_le_bytes())
+        .update(&lo[n]);
+    x.finalize_into(&mut hi[0]);
+    x.read(&mut hi[1]);
 }
 
 /// (sd_j, com_j) = SHAKE256[leaf](iv || u8(i) || u16le(N + j) || seed, 48),
-/// with `node` = N + j.
+/// with `node` = N + j, read straight into `sd` and `com`.
 #[inline]
-fn leaf(iv: &[u8; 16], tree: u8, node: usize, seed: &Seed) -> (Seed, Com) {
-    let mut out: [u8; SEED_BYTES + COM_BYTES] = Xof::new(Tag::Leaf)
-        .update(iv)
+fn leaf(iv: &[u8; 16], tree: u8, node: usize, seed: &Seed, sd: &mut Seed, com: &mut Com) {
+    let mut x = Xof::new(Tag::Leaf);
+    x.update(iv)
         .update(&[tree])
         .update(&(node as u16).to_le_bytes())
-        .update(seed)
-        .finalize();
-    let mut sd = [0u8; SEED_BYTES];
-    let mut com = [0u8; COM_BYTES];
-    sd.copy_from_slice(&out[..SEED_BYTES]);
-    com.copy_from_slice(&out[SEED_BYTES..]);
-    out.zeroize();
-    (sd, com)
+        .update(seed);
+    x.finalize_into(sd);
+    x.read(com);
 }
 
 /// Heap index of the co-path node of leaf j* at depth d (1..=depth).
@@ -77,18 +70,22 @@ pub fn commit(root: &Seed, iv: &[u8; 16], tree: u8, depth: usize) -> Tree {
     let mut nodes = vec![[0u8; SEED_BYTES]; 2 * n_leaves];
     nodes[1] = *root;
     for n in 1..n_leaves {
-        let (l, r) = expand(iv, tree, n, &nodes[n]);
-        nodes[2 * n] = l;
-        nodes[2 * n + 1] = r;
+        expand(iv, tree, n, &mut nodes);
     }
-    let mut sds = Vec::with_capacity(n_leaves);
-    let mut coms = Vec::with_capacity(n_leaves);
-    let mut th = Xof::new(Tag::Tree).update(iv).update(&[tree]);
+    let mut sds = vec![[0u8; SEED_BYTES]; n_leaves];
+    let mut coms = vec![[0u8; COM_BYTES]; n_leaves];
+    let mut th = Xof::new(Tag::Tree);
+    th.update(iv).update(&[tree]);
     for j in 0..n_leaves {
-        let (sd, com) = leaf(iv, tree, n_leaves + j, &nodes[n_leaves + j]);
-        th.absorb(&com);
-        sds.push(sd);
-        coms.push(com);
+        leaf(
+            iv,
+            tree,
+            n_leaves + j,
+            &nodes[n_leaves + j],
+            &mut sds[j],
+            &mut coms[j],
+        );
+        th.absorb(&coms[j]);
     }
     Tree {
         hash: th.finalize(),
@@ -144,21 +141,27 @@ pub fn reconstruct(
     }
     for n in 2..n_leaves {
         if known[n] {
-            let (l, r) = expand(iv, tree, n, &nodes[n]);
-            nodes[2 * n] = l;
-            nodes[2 * n + 1] = r;
+            expand(iv, tree, n, &mut nodes);
             known[2 * n] = true;
             known[2 * n + 1] = true;
         }
     }
-    let mut th = Xof::new(Tag::Tree).update(iv).update(&[tree]);
+    let mut th = Xof::new(Tag::Tree);
+    th.update(iv).update(&[tree]);
     for j in 0..n_leaves {
         if j == jstar {
             th.absorb(&opening[depth * SEED_BYTES..]);
         } else {
-            let (sd, com) = leaf(iv, tree, n_leaves + j, &nodes[n_leaves + j]);
+            let mut com = [0u8; COM_BYTES];
+            leaf(
+                iv,
+                tree,
+                n_leaves + j,
+                &nodes[n_leaves + j],
+                &mut sds[j],
+                &mut com,
+            );
             th.absorb(&com);
-            sds[j] = sd;
         }
     }
     th.finalize()

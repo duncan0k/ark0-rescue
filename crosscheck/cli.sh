@@ -9,10 +9,10 @@ ROOT=$(cd "$HERE/.." && pwd)
 WORK=$HERE/work/cli
 mkdir -p "$WORK"
 
-cargo build --quiet --release --features cli --bin voleith-verify --manifest-path "$ROOT/rust/Cargo.toml"
+cargo build --quiet --profile cli --features cli --bin voleith-verify --manifest-path "$ROOT/rust/Cargo.toml"
 (cd "$ROOT/go" && go build -o "$WORK/voleith-verify-go" ./cmd/voleith-verify)
 
 python3 -I "$HERE/cli_agree.py" "$WORK" \
-  "$ROOT/rust/target/release/voleith-verify" \
+  "$ROOT/rust/target/cli/voleith-verify" \
   "python3 -I $ROOT/python/tools/verify_cli.py" \
   "$WORK/voleith-verify-go"
