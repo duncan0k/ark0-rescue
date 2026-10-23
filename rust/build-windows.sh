@@ -20,9 +20,13 @@
 #   versions are recorded, not required: the build script only prints cfg
 #   lines). A tool that is a symbolic link must resolve to a file of the
 #   same package.
-# With strace installed, build 1 runs under strace and the script fails if
-# any program other than these, the toolchain's own and the build scripts
-# was executed.
+# Both builds run under strace (execve and execveat, with -f), and
+# windows/exec_trace.py fails the build if any program other than these,
+# the toolchain's own and the build scripts ran, or if any line of the
+# trace cannot be parsed (split unfinished/resumed lines are joined per
+# PID). strace (/usr/bin/strace, package strace) is required: without it
+# the script refuses, unless --unpublished says that the hashes of this
+# build will not be published.
 # cargo runs under `env -i` with a fixed environment: RUSTUP_TOOLCHAIN,
 # LC_ALL=C, TZ=UTC, SOURCE_DATE_EPOCH=0, the rustflags below, the linker,
 # and nothing else that cargo or rustc reads (no RUSTFLAGS, CARGO_BUILD_*,
@@ -30,7 +34,8 @@
 # network settings for downloading crates pass through (proxy variables and
 # CA files); `--locked` pins every crate by checksum.
 #
-# Usage: bash rust/build-windows.sh [out dir]   (default rust/target/windows-out)
+# Usage: bash rust/build-windows.sh [--unpublished] [out dir]
+#   (default out dir rust/target/windows-out)
 # Builds twice, each time from an empty target directory, checks that the
 # two builds are byte-identical, copies the .exe files to the out dir and
 # prints their SHA-256. Every local path that could enter the binaries
@@ -39,7 +44,29 @@
 # symbol table is stripped.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd -P)
-OUT=${1:-$HERE/target/windows-out}
+OUT=
+UNPUBLISHED=0
+for a in "$@"; do
+  case "$a" in
+    --unpublished) UNPUBLISHED=1 ;;
+    -*)
+      echo "build-windows.sh: unknown option $a" >&2
+      exit 2
+      ;;
+    *)
+      if [ -n "$OUT" ]; then
+        echo "build-windows.sh: one out dir only" >&2
+        exit 2
+      fi
+      OUT=$a
+      ;;
+  esac
+done
+OUT=${OUT:-$HERE/target/windows-out}
+# Overridable only to test the refusal: a published build needs the file
+# to belong to the package strace.
+STRACE=${WINDOWS_BUILD_STRACE:-/usr/bin/strace}
+PYTHON=/usr/bin/python3
 # Where the two build directories go (check-windows-shadowing.sh moves them).
 BASE=${WINDOWS_BUILD_BASE:-$HERE/target}
 TARGET=x86_64-pc-windows-gnu
@@ -86,6 +113,18 @@ for p in "${PACKAGES[@]}"; do
   have=$(dpkg-query -W -f='${Version}' "$name" 2> /dev/null || true)
   [ "$have" = "$want" ] || refuse "$name is '${have:-not installed}', the hashes are for $want"
 done
+
+# The exec trace, required for a build whose hashes are published.
+TRACED=1
+if [ -x "$STRACE" ] && [ "$(dpkg -S "$STRACE" 2> /dev/null | cut -d: -f1 || true)" = strace ]; then
+  :
+elif [ "$UNPUBLISHED" = 1 ]; then
+  TRACED=0
+  echo "build-windows.sh: no $STRACE from package strace: building UNTRACED (--unpublished)" >&2
+else
+  refuse "$STRACE (package strace) is required to trace the build; use --unpublished for a build whose hashes are not published"
+fi
+[ -x "$PYTHON" ] || refuse "$PYTHON not found"
 
 # No cargo configuration that could change the build.
 d=$BUILD_DIR
@@ -178,40 +217,27 @@ build() { # n
   local encoded
   encoded=$(IFS=$'\x1f'; echo "${flags[*]}")
   local trace=()
-  if [ "$1" = 1 ] && command -v strace > /dev/null; then
+  if [ "$TRACED" = 1 ]; then
     mkdir -p "$tdir"
-    trace=(strace -f -qq -e trace=execve -e signal=none -o "$tdir/exec.log")
+    trace=("$STRACE" -f -qq -e trace=execve,execveat -e signal=none -o "$tdir/exec.log")
   fi
   clean "CARGO_ENCODED_RUSTFLAGS=$encoded" \
     "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=$LINKER" \
     "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$HOST_CC" \
     "${trace[@]}" "$CARGO" build --quiet --locked --profile cli --features cli --target "$TARGET" \
     --manifest-path "$HERE/Cargo.toml" --target-dir "$tdir" "${bin_args[@]}"
+  if [ "$TRACED" = 1 ]; then
+    # Every program the build executed: the toolchain's, the build
+    # scripts', or one of TOOLS; any unreadable line fails.
+    local allow=(--allow "$CARGO" --allow-prefix "$TOOLCHAIN_DIR"
+      --allow-glob "$tdir/*/build/*/build-script-build")
+    for t in "${TOOLS[@]}"; do allow+=(--allow "${t%%|*}"); done
+    "$PYTHON" -I "$HERE/windows/exec_trace.py" "$tdir/exec.log" "${allow[@]}" ||
+      refuse "build $1 ran a program that is not allowed, or its trace cannot be read"
+  fi
 }
 
 build 1
-# Every program build 1 executed: the toolchain's, the build scripts', or
-# one of TOOLS.
-if [ -e "$BASE/windows-build-1/exec.log" ]; then
-  allowed=$(for t in "${TOOLS[@]}"; do echo "${t%%|*}"; done)
-  ran=$(grep -E 'execve\(".*\) = 0$' "$BASE/windows-build-1/exec.log" |
-    sed -E 's/^[0-9]+ +execve\("([^"]+)".*/\1/' | sort -u)
-  while read -r f; do
-    case "$f" in
-      "$CARGO" | "$TOOLCHAIN_DIR"/*) ;;
-      "$BASE/windows-build-1/"*/build/*/build-script-build) ;;
-      *)
-        if ! grep -qxF "$f" <<< "$allowed"; then
-          echo "build-windows.sh: build 1 ran $f, which is not a listed tool" >&2
-          exit 1
-        fi
-        ;;
-    esac
-  done <<< "$ran"
-  echo "strace: build 1 ran only the toolchain, the build scripts and the listed tools"
-else
-  echo "strace not installed: the programs that ran were not traced"
-fi
 build 2
 mkdir -p "$OUT"
 status=0
@@ -249,4 +275,7 @@ for b in "${BINS[@]}"; do
   fi
 done
 (cd "$OUT" && sha256sum "${BINS[@]/%/.exe}")
+if [ "$TRACED" = 0 ]; then
+  echo "UNPUBLISHED BUILD: not traced; do not publish these hashes" >&2
+fi
 exit $status

@@ -160,9 +160,12 @@ the linker `/usr/bin/x86_64-w64-mingw32-gcc-win32` with its `collect2`
 and `ld`, `dlltool` (`-Cdlltool`) with the `as` it calls, and the host
 `gcc-13`, `collect2` and `ld` that link getrandom's build script. The
 script checks that each belongs to its package (`dpkg -S`), prints its
-SHA-256 (`../NOTES.md` records them), and, with `strace` installed,
-fails if the first build ran any other program than these, the
-toolchain's and the build scripts. `bash check-windows-shadowing.sh`
+SHA-256 (`../NOTES.md` records them). Both builds run under `strace`
+(`execve` and `execveat`), and `windows/exec_trace.py` fails the build if
+any other program ran than these, the toolchain's and the build scripts,
+or if a line of the trace cannot be read. `strace` is required (package
+`strace`); `bash build-windows.sh --unpublished` builds without it, for
+hashes that are not to be published. `bash check-windows-shadowing.sh`
 puts stand-ins of the same names first on `PATH` and checks that the
 build gives the same two files.
 
