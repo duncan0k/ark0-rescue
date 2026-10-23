@@ -421,9 +421,11 @@ fn prove_rejects_bad_arguments() {
         assert_no_seed(&c.x_hex, &[&p.stdout, &p.stderr]);
     }
     // A 64-byte K and a 65,535-byte message are within the limits: the tool
-    // computes y for this K and the proof verifies.
+    // computes y for this K and the proof verifies. On Windows a command
+    // line holds at most 32,767 characters in all, so the message there is
+    // the largest that fits with the other arguments (README.md).
     let k64 = "~".repeat(64);
-    let max_msg = "ab".repeat(65_535);
+    let max_msg = "ab".repeat(if cfg!(windows) { 16_000 } else { 65_535 });
     let mut a = base.clone();
     a[1] = &k64;
     a[5] = &max_msg;
@@ -615,18 +617,20 @@ fn faults_leak_nothing() {
         let o = run_env(PROVE, &args, stdin.as_bytes(), Some(&dir), &env);
         let err = String::from_utf8_lossy(&o.stderr).into_owned();
         if *fault == "panic" {
-            #[cfg(unix)]
-            let aborted = o.signal == Some(6);
-            #[cfg(not(unix))]
-            let aborted = false;
-            assert!(
-                aborted || o.code == 101,
-                "panic: {:?} {:?}",
-                o.code,
-                o.signal
-            );
-            if expect_abort {
-                assert!(aborted, "built with --profile cli, a panic must abort");
+            // Windows: the panic hook of no_crash_dumps ends the process
+            // with TerminateProcess and exit code 3, in every profile.
+            // Elsewhere: SIGABRT with the `cli` profile (panic = "abort"),
+            // exit 101 when unwinding (test profiles).
+            if cfg!(windows) {
+                assert_eq!(o.code, 3, "panic: {:?} {:?}", o.code, o.signal);
+            } else {
+                let aborted = o.signal == Some(6);
+                assert!(
+                    aborted || (o.code == 101 && !expect_abort),
+                    "panic: {:?} {:?} (expect abort: {expect_abort})",
+                    o.code,
+                    o.signal
+                );
             }
             assert!(err.contains("fault injection: panic inside prove"), "{err}");
         } else {
