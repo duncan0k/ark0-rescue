@@ -967,6 +967,84 @@ Checks (as before; `ff4ea00` → this round):
 | `bash rust/check-verifier-only.sh` | OK | OK, 16 patterns: 0 in 4 verifier-only builds, each ≥ 1 in its control |
 | native-static-libs | `-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc` | the same |
 
+### Review round 2 (2026-10-23)
+
+A read-only review of the round-1 fixes up to `63e2570`. It found the
+sponge itself correct: rate 136, the 0x1f/0x80 padding, lane order,
+little-endian bytes, and the fast and slow paths. The reviewer also
+transcribed it to Python and matched hashlib on 9,430 cases. SPEC.md,
+the vector files and every proof are unchanged.
+
+| Item | Change | Commit |
+|---|---|---|
+| 1 Xof state (Medium) | Type states instead of `debug_assert!`: `Xof` absorbs, `finalize_xof(self)` consumes it and returns an `XofReader` that only reads; misuse no longer compiles in any build. The state is in a `Box`, so passing either type by value moves a pointer. Same bytes (vector and differential tests) and speed (verify median 20.4–20.8 ms). New test: many small reads, crossing the 136-byte boundary at every offset, equal one large read. | `94fc7b6` |
+| 2 `prctl` (Medium) | Arguments passed as `libc::c_ulong`; a unit test reads back `PR_GET_DUMPABLE` = 0 and `RLIMIT_CORE` = 0/0. | `6838470` |
+| 3 Fault injection (Medium) | A `fault-injection` build refuses to run (exit 1, message, nothing read) unless `VOLEITH_ALLOW_FAULT_INJECTION=tests`; tested without it and with four wrong values. `build-windows.sh` builds `--features cli` only and fails if a binary carries the refusal's marker string; the README says never `--all-features`. | `848d314` |
+| 6 Windows fault test (Low) | The injected panic is asserted per platform: exit code 3 on Windows, SIGABRT elsewhere with the `cli` profile. The cli tests, run as a Windows program under wine, pass (8 of 8; the 65,535-byte message case uses 16,000 bytes on Windows, where a command line holds 32,767 characters). | `c230258` |
+| 4 Windows build tools (Medium) | Tools by absolute path (linker, `-Cdlltool`, host linker); each, and a link's target, must belong to its package (`dpkg -S`); their SHA-256 below. With strace, the script fails if build 1 ran anything else; this found the host `/usr/bin/ld`, now listed. `check-windows-shadowing.sh` puts stand-ins (links to `/bin/false`) for `cc`, `ld` and `x86_64-w64-mingw32-{gcc,gcc-win32,as,dlltool,ld}` first on PATH in a fresh `/tmp` directory, builds, compares with a normal build (same files) and removes the directory. | `97ce9a0` |
+| 5 Hibernation (Medium) | README: `--require-mlock` keeps pages out of swap, not out of a hibernation image; the claim holds only with hibernation off or its image encrypted. On Windows the tool's pages can reach `pagefile.sys` and `hiberfil.sys` (`powercfg /hibernate off`, BitLocker). | `6fa7940` |
+
+**This sandbox.** During item 4, stand-ins for `cc`, `ld` and
+`x86_64-w64-mingw32-{gcc,gcc-win32,as,dlltool,ld}` were written into
+`/root/.cargo/bin`, and they are still there: removing them needed a
+permission nobody could give, and nothing outside `/home/user` and `/tmp`
+was touched after that. `cc` and `ld` are mode 644; the five mingw ones
+are executable scripts that exit 99. Every result after that, all of the
+results below included, was produced with
+`PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.cargo/bin`
+(plus `/usr/local/go/bin` at the end for Go). With that PATH,
+`command -v` finds `/usr/bin` for all seven names and the rustup proxies
+for `cargo` and `rustc`. A strace of a host build showed rustc running
+`/usr/bin/cc`. The Windows build calls its tools by absolute path in an
+`env -i` environment and its strace check passed.
+
+**Windows build** (environment as in round 1; profile `cli`, `--features
+cli`). The two builds were identical, and the shadowing check gave the
+same files. These replace the earlier hashes:
+
+| file | SHA-256 |
+|---|---|
+| `voleith-prove.exe` | `4828a2054e7f4f71fb262970c343b6ac2fe98b33adbea7fba2601242d5f8a546` |
+| `voleith-verify.exe` | `d67ceec30efb33f2fcbdedaef1a2f5d09c642a7753205815197ee9173a1663f8` |
+
+The tools that ran:
+
+| tool | package and version | SHA-256 |
+|---|---|---|
+| `/usr/bin/x86_64-w64-mingw32-gcc-win32` | gcc-mingw-w64-x86-64-win32 13.2.0-6ubuntu1+26.1 | `260b0d734871a82030aaaa446338cd1dd1a48efeec119a110c0379b73a7ce972` |
+| `/usr/lib/gcc/x86_64-w64-mingw32/13-win32/collect2` | gcc-mingw-w64-x86-64-win32 13.2.0-6ubuntu1+26.1 | `7fa510def1a3ac0f64c33096760c2db0eb5c13e8cf1461c95b1407a95a640e75` |
+| `/usr/bin/x86_64-w64-mingw32-ld` | binutils-mingw-w64-x86-64 2.41.90.20240122-1ubuntu1+11.4 | `24ae8dc9ce6a34df398a7ddff2ba4a7d159eb18e4c60dd8f1c06687461ce1daa` |
+| `/usr/bin/x86_64-w64-mingw32-dlltool` | binutils-mingw-w64-x86-64 2.41.90.20240122-1ubuntu1+11.4 | `d6cec3d94ef17b5136b92d6c19632c8490134e4eb8400ca34a5ef1ffc389e9e6` |
+| `/usr/bin/x86_64-w64-mingw32-as` | binutils-mingw-w64-x86-64 2.41.90.20240122-1ubuntu1+11.4 | `3fb8bf11d2646c1bf07dbcdbe2909fbc4da79f92e4c0f732a5c7a9e415958276` |
+| `/usr/bin/x86_64-linux-gnu-gcc-13` (host) | gcc-13-x86-64-linux-gnu 13.3.0-6ubuntu2~24.04.1 | `1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26` |
+| `/usr/libexec/gcc/x86_64-linux-gnu/13/collect2` (host) | gcc-13-x86-64-linux-gnu 13.3.0-6ubuntu2~24.04.1 | `4d1f341ae5b763b513258ee2812422a45e063c30a2f1924a0cf63d3699f3a158` |
+| `/usr/bin/ld` → `x86_64-linux-gnu-ld.bfd` (host) | binutils / binutils-x86-64-linux-gnu 2.42-4ubuntu2.10 | `e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b` |
+
+Under wine 9.0, the README trial run printed vector 0's y. The Windows,
+Rust, Python and Go verify commands all said `valid`, and no temporary
+file was left behind.
+
+Checks (`63e2570` → this round):
+
+| Check | Before | After |
+|---|---|---|
+| Python unittest | 81 OK | 81 OK |
+| `cargo test --release`, `cargo test` | 41 passed, 2 ignored | 42 passed, 2 ignored (lib 26: split reads) |
+| `cargo test --release --no-default-features` | 32 passed | 33 passed |
+| `cargo test --release --features cli` | 55 passed, 2 ignored | 58 passed, 2 ignored (bins 5 + 5: dumpable) |
+| `cargo test --features fault-injection` | 56 passed, 2 ignored | 60 passed, 2 ignored (cli 8: refusal) |
+| `VOLEITH_TEST_EXPECT_ABORT=1 cargo test --profile cli --features fault-injection --test cli --bins` | 15 passed | 18 passed; the panic aborts |
+| the same for `x86_64-pc-windows-gnu` under wine, dev and cli profiles | — | 16 passed each (bins 4 + 4, cli 8); the panic exits 3 |
+| clippy `-D warnings` (5 configurations, two of them Windows) | clean | clean |
+| `cargo fmt --check`, `go vet`, `gofmt -l` | clean | clean |
+| `go test ./...` | 17 pass, 1 skip | 17 pass, 1 skip |
+| fuzz, `run_campaign.sh 120` | 5,871 + 6,079, 12,328, 16,788 | 5,740 + 5,646, 10,281, 15,958; no crash, artifact or slow input |
+| `bash crosscheck/run.sh` | 800, 0 mismatches | 800, 0 mismatches |
+| `bash crosscheck/cli.sh` | 62, 0 mismatches | 62, 0 mismatches |
+| `bash rust/check-verifier-only.sh` | OK | OK (16 patterns, each with its control) |
+| `bash rust/build-windows.sh`, `bash rust/check-windows-shadowing.sh` | — | identical builds; strace check passed; shadowing OK |
+| native-static-libs | `-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc` | the same |
+
 ## Open questions for reviewers
 
 1. **The security argument.** Does FAEST v1.1 Theorems 1–2 (with BBD+23
