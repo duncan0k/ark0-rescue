@@ -984,6 +984,12 @@ the vector files and every proof are unchanged.
 | 4 Windows build tools (Medium) | Tools by absolute path (linker, `-Cdlltool`, host linker); each, and a link's target, must belong to its package (`dpkg -S`); their SHA-256 below. With strace, the script fails if build 1 ran anything else; this found the host `/usr/bin/ld`, now listed. `check-windows-shadowing.sh` puts stand-ins (links to `/bin/false`) for `cc`, `ld` and `x86_64-w64-mingw32-{gcc,gcc-win32,as,dlltool,ld}` first on PATH in a fresh `/tmp` directory, builds, compares with a normal build (same files) and removes the directory. | `97ce9a0` |
 | 5 Hibernation (Medium) | README: `--require-mlock` keeps pages out of swap, not out of a hibernation image; the claim holds only with hibernation off or its image encrypted. On Windows the tool's pages can reach `pagefile.sys` and `hiberfil.sys` (`powercfg /hibernate off`, BitLocker). | `6fa7940` |
 
+The type states of item 1 allocate the sponge on the heap (a `Box`) for
+every hash call, a few thousand per proof; verify time was unchanged by
+it: `prove_verify` bench median 20.4 and 20.8 ms in two runs (31
+iterations each), against 20.2–21.2 ms with the stack sponge of round 1
+and 21.5 ms with `sha3` before.
+
 **This sandbox.** During item 4, stand-ins for `cc`, `ld` and
 `x86_64-w64-mingw32-{gcc,gcc-win32,as,dlltool,ld}` were written into
 `/root/.cargo/bin`, and they are still there: removing them needed a
