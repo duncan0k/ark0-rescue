@@ -144,6 +144,17 @@ only, which the script checks and otherwise refuses to build:
 - no `.cargo/config` or `.cargo/config.toml` above the checkout or in
   `CARGO_HOME`.
 
+The tools that run are called by absolute path, never found on `PATH`:
+the linker `/usr/bin/x86_64-w64-mingw32-gcc-win32` with its `collect2`
+and `ld`, `dlltool` (`-Cdlltool`) with the `as` it calls, and the host
+`gcc-13`, `collect2` and `ld` that link getrandom's build script. The
+script checks that each belongs to its package (`dpkg -S`), prints its
+SHA-256 (`../NOTES.md` records them), and, with `strace` installed,
+fails if the first build ran any other program than these, the
+toolchain's and the build scripts. `bash check-windows-shadowing.sh`
+puts stand-ins of the same names first on `PATH` and checks that the
+build gives the same two files.
+
 cargo runs under `env -i` with `LC_ALL=C`, `TZ=UTC`, `SOURCE_DATE_EPOCH=0`
 and nothing else that cargo or rustc reads, apart from the network
 settings for crate downloads, so the caller's `RUSTFLAGS`, `CARGO_*` and
