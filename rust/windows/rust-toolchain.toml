@@ -1,0 +1,6 @@
+# The toolchain of rust/build-windows.sh, which builds from this directory.
+# An exact version, so that the Windows tools can be rebuilt byte for byte.
+[toolchain]
+channel = "1.97.0"
+profile = "minimal"
+targets = ["x86_64-pc-windows-gnu"]
