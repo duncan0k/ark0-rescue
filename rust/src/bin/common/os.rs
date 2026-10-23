@@ -38,8 +38,11 @@ pub fn no_crash_dumps() -> Result<(), String> {
     {
         #[cfg(target_os = "linux")]
         {
+            // prctl(2) is variadic and reads its arguments as unsigned
+            // long: pass them as c_ulong, not as int literals.
+            let zero: libc::c_ulong = 0;
             // SAFETY: prctl with integer arguments only.
-            let r = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+            let r = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, zero, zero, zero, zero) };
             if r != 0 {
                 return Err(format!(
                     "prctl(PR_SET_DUMPABLE, 0) failed: {}",

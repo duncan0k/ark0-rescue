@@ -219,6 +219,26 @@ pub fn read_limited(path: &OsStr, limit: usize) -> std::io::Result<Result<Vec<u8
 mod tests {
     use super::*;
 
+    /// no_crash_dumps takes effect: the process is not dumpable and its
+    /// core-size limit is 0 (it changes this test process, harmlessly).
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[allow(unsafe_code)]
+    fn crash_dumps_are_off() {
+        os::no_crash_dumps().unwrap();
+        let zero: libc::c_ulong = 0;
+        // SAFETY: prctl with integer arguments only.
+        let d = unsafe { libc::prctl(libc::PR_GET_DUMPABLE, zero, zero, zero, zero) };
+        assert_eq!(d, 0);
+        let mut lim = libc::rlimit {
+            rlim_cur: 1,
+            rlim_max: 1,
+        };
+        // SAFETY: a pointer to a local struct of the right type.
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut lim) }, 0);
+        assert_eq!((lim.rlim_cur, lim.rlim_max), (0, 0));
+    }
+
     #[test]
     fn publish_never_replaces() {
         let dir = std::env::temp_dir().join(format!("voleith-publish-{}", std::process::id()));
