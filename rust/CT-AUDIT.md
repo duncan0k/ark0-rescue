@@ -153,7 +153,10 @@ the scrub (a callee) cannot reach.
 - **Keccak permutation temporaries.** Since 2026-10-23, `src/sym.rs`
   implements the SHAKE256 sponge itself on `keccak::f1600`: input is XORed
   into the state and output read from it in place, the state is zeroized
-  on drop, and an `Xof` is not moved once it has absorbed data. This closes
+  on drop, and the state lives on the heap, so moving an `Xof` (absorbing)
+  or the `XofReader` that its `finalize` returns moves only a pointer. The
+  two types make it impossible in any build to absorb after finalizing,
+  finalize twice or read before finalizing (review round 2). This closes
   the earlier gap of `digest 0.10`'s block buffer and the XOF reader's
   output buffer, which had no zeroize support. What remains are the
   permutation's own locals inside `keccak::f1600` (stack and registers),

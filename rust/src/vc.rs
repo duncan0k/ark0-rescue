@@ -24,26 +24,28 @@ pub const fn opening_len(depth: usize) -> usize {
 #[inline]
 fn expand(iv: &[u8; 16], tree: u8, n: usize, nodes: &mut [Seed]) {
     let (lo, hi) = nodes.split_at_mut(2 * n);
-    let mut x = Xof::new(Tag::Ggm);
-    x.update(iv)
+    let mut r = Xof::new(Tag::Ggm)
+        .update(iv)
         .update(&[tree])
         .update(&(n as u16).to_le_bytes())
-        .update(&lo[n]);
-    x.finalize_into(&mut hi[0]);
-    x.read(&mut hi[1]);
+        .update(&lo[n])
+        .finalize_xof();
+    r.read(&mut hi[0]);
+    r.read(&mut hi[1]);
 }
 
 /// (sd_j, com_j) = SHAKE256[leaf](iv || u8(i) || u16le(N + j) || seed, 48),
 /// with `node` = N + j, read straight into `sd` and `com`.
 #[inline]
 fn leaf(iv: &[u8; 16], tree: u8, node: usize, seed: &Seed, sd: &mut Seed, com: &mut Com) {
-    let mut x = Xof::new(Tag::Leaf);
-    x.update(iv)
+    let mut r = Xof::new(Tag::Leaf)
+        .update(iv)
         .update(&[tree])
         .update(&(node as u16).to_le_bytes())
-        .update(seed);
-    x.finalize_into(sd);
-    x.read(com);
+        .update(seed)
+        .finalize_xof();
+    r.read(sd);
+    r.read(com);
 }
 
 /// Heap index of the co-path node of leaf j* at depth d (1..=depth).
@@ -74,8 +76,7 @@ pub fn commit(root: &Seed, iv: &[u8; 16], tree: u8, depth: usize) -> Tree {
     }
     let mut sds = vec![[0u8; SEED_BYTES]; n_leaves];
     let mut coms = vec![[0u8; COM_BYTES]; n_leaves];
-    let mut th = Xof::new(Tag::Tree);
-    th.update(iv).update(&[tree]);
+    let mut th = Xof::new(Tag::Tree).update(iv).update(&[tree]);
     for j in 0..n_leaves {
         leaf(
             iv,
@@ -146,8 +147,7 @@ pub fn reconstruct(
             known[2 * n + 1] = true;
         }
     }
-    let mut th = Xof::new(Tag::Tree);
-    th.update(iv).update(&[tree]);
+    let mut th = Xof::new(Tag::Tree).update(iv).update(&[tree]);
     for j in 0..n_leaves {
         if j == jstar {
             th.absorb(&opening[depth * SEED_BYTES..]);
