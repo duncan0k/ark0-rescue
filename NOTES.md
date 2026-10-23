@@ -539,7 +539,9 @@ none overlapped minutes x4 or x5 or another workload's six-hourly job
   "2026-10-15 work branches"). Still open: a human review of the
   constant-time prover before any real seed is used (`rust/CT-AUDIT.md`).
 - **Core integration.** Annex TLV, rescue sighash with `key_version = 0x03`,
-  the rescue token, validation weight and policy (M4-R design).
+  the rescue token, validation weight and policy (M4-R design). The
+  verifier-only static library is ready to link (section "2026-10-23 tools
+  and verifier-only build").
 - **Review.** Two internal reviews are done (section "2026-10-14 internal
   reviews"). Still open: a written security note with every bound derived,
   not sketched, and the external cryptographer review that R1 recommends
@@ -785,6 +787,116 @@ No test failed. SPEC.md, `python/`, `vectors/` and `rust/src` are those of
 the reviewed branches, and every proof is unchanged (the Rust vector and
 differential tests reproduce the 4 vector and 100 differential proofs byte
 for byte).
+
+## 2026-10-23 tools and verifier-only build
+
+Branch `cloud/c-r2-cli`, from `main` at `273f11b`. The protocol is
+unchanged: SPEC.md and the three vector files have the SHA-256 they had
+before (`c8b8773c…`, `e4ae3f6d…8097d3`, `9ec6ff5f…0a3535`,
+`562954f8…484cae`), and the Rust tests still reproduce the 4 vector and
+100 differential proofs byte for byte.
+
+- **Verifier-only build.** A cargo feature `prover`, on by default, gates
+  every prover-only item: `prove`, `prove_scrubbed`, `prove_impl`,
+  `scrub_stack`, `ProveError`, `ProverTrace`, `vc::commit` and `vc::Tree`,
+  `unihash::CtMul`, `Circuit::evaluate` and `prover_terms`,
+  `s1_secret_bits`, `s1_hmac`, `S1_WITNESS_LEN`, the SHAKE tags `rnd` and
+  `root`, and the dudect tests (`src/dudect.rs`). `prove_traced` needs
+  `prover` and `test-trace`; `test-trace` stays a test-only feature,
+  enabled by the self dev-dependency, which no longer turns on default
+  features, so that `cargo test --no-default-features` tests the
+  verifier-only library.
+  - `cargo build --release --no-default-features --lib` gives a staticlib
+    that exports `voleith_verify_s1`. `rust/check-verifier-only.sh` scans
+    it with `nm -C`, with and without LTO, for the names above (and for
+    `prove_impl`, `prove_scrubbed`, `scrub_stack`, `CtMul`,
+    `prover_terms`, `ProverTrace` anywhere in a symbol): 0 hits in both
+    verifier-only archives, 10 in both default ones (the positive
+    control).
+  - `cargo rustc --release --no-default-features --lib -- --print
+    native-static-libs` on x86_64-unknown-linux-gnu:
+    `-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc`.
+- **Command-line tools** (`rust/src/bin/`, feature `cli` = `prover` +
+  `getrandom`; see `rust/README.md`). `voleith-prove` reads the seed from
+  standard input only (64 hex digits, then nothing, `\n` or `\r\n`),
+  through an unbuffered handle so that std's stdin buffer keeps no copy;
+  computes y; draws rho with getrandom; proves; verifies; writes the proof
+  to a new file; prints `y=<hex>`. Seed, hex digits, HMAC input and rho
+  are in `Zeroizing` buffers inside `run()`, cleared before `main` exits
+  on every path. `voleith-verify` prints `valid`/`invalid`, exit 0/1, 2
+  for a usage error; a proof file of the wrong length is invalid.
+  - **getrandom `=0.3.4`**, bin-only in effect: an optional dependency
+    that only the `cli` feature enables and only `voleith-prove` calls. It
+    was already in `Cargo.lock` (through the benchmark's secp256k1), is a
+    year old, has MSRV 1.63, and is what most of the ecosystem runs (0.4
+    is newer). On Linux it calls getrandom(2); on Windows `ProcessPrng`
+    from bcryptprimitives.dll. Writing the OS calls by hand would need
+    unsafe FFI in the tool for no gain.
+  - `rust/tests/cli.rs`: round trip with the seed of the first proof
+    vector (y must equal the vector's), all accepted stdin forms; 19
+    malformed stdin inputs (bad hex, 63/65/66 digits, extra lines, a lone
+    `\r`, spaces, NUL, 4 kB); 22 bad prove command lines (K empty, 65
+    bytes, tab, DEL, non-ASCII, newline; suffix 256, -1, 01, empty, x;
+    odd, non-hex and 65,536-byte messages; missing, repeated and unknown
+    options); 17 bad verify command lines; an existing output file. No
+    run prints 16 hex digits or 8 raw bytes of the seed to stdout or
+    stderr, or writes them into the proof.
+- **Python and Go verify commands.** `python/tools/verify_cli.py`
+  (`python -I`) and `go/cmd/voleith-verify`, standard library only, with
+  the Rust command's arguments, parsing rules and exit codes.
+  `bash crosscheck/cli.sh` builds the Rust and Go commands and runs
+  `crosscheck/cli_agree.py`: the 4 vector proofs, 20 differential cases
+  (every tenth valid one; the first mutated case of ten kinds that a
+  command line can express) and 34 usage and edge cases. All three give
+  the expected exit code and output on all 58; with `/bin/true` as a
+  command, all 58 are reported as mismatches.
+- **Windows build.** `bash rust/build-windows.sh` cross-compiles both
+  tools for `x86_64-pc-windows-gnu`, with Rust 1.97.0 pinned in
+  `rust/windows/rust-toolchain.toml` (its own directory, so the crate's
+  tests are not pinned) and Ubuntu 24.04's mingw-w64:
+  `gcc-mingw-w64-x86-64` 13.2.0-6ubuntu1+26.1 (`-win32` and `-posix`
+  variants the same), `binutils-mingw-w64-x86-64`
+  2.41.90.20240122-1ubuntu1+11.4, `mingw-w64-x86-64-dev` 11.0.1-3build1.
+  It builds twice from empty target directories with every local path
+  remapped (checkout, target directory, CARGO_HOME, RUSTUP_HOME), `ld
+  --no-insert-timestamp` and `-Cstrip=symbols`. Without the strip,
+  `voleith-prove.exe` differed between builds: dlltool names the symbols
+  of getrandom's raw-dylib import library after rustc's random temporary
+  directory, which also put a local path in the binary. With it, the two
+  builds are byte-identical, and a third from a checkout at another path
+  gives the same hashes:
+
+  | file | SHA-256 |
+  |---|---|
+  | `voleith-prove.exe` | `4918c38f12fbc8cd6864a41de0ee798044b7394e5079584c2f76bcebd54f5353` |
+  | `voleith-verify.exe` | `f778aac193534eb632fd62aa1387242043319a519def11fd8b4bbc1027e9ff30` |
+
+  Under wine 9.0 (Ubuntu's `wine64`, 9.0~repack-4build3): `voleith-prove.exe`
+  with the first vector's seed (CRLF on stdin) printed the vector's y; its
+  proof is `valid` for `voleith-verify.exe` and for the Rust, Python and
+  Go commands on Linux, and `invalid` after one flipped bit; a bad seed,
+  an extra line and suffix 300 exit 2. Not run on Windows itself. The
+  binaries are not committed.
+- **Still open before a real seed.** The human review of the constant-time
+  prover (`rust/CT-AUDIT.md`, "Not done yet") applies to these tools too.
+
+Checks (4 vCPUs, rustc 1.97.0, nightly 1.101.0, cargo-fuzz 0.13.2,
+Go 1.24.7, Python 3.13.17):
+
+| Check | Before (`273f11b`) | After |
+|---|---|---|
+| Python unittest | 81 OK | 81 OK |
+| `cargo test --release` | 40 passed, 2 ignored | 40 passed, 2 ignored |
+| `cargo test` | 40 passed, 2 ignored | 40 passed, 2 ignored |
+| `cargo test --release --no-default-features` | — | 31 passed (lib 18, cold_reject 1, differential 1, gadget_vectors 6, vectors 5); the prover tests are compiled out |
+| `cargo test --release --features cli` | — | 50 passed, 2 ignored (the 40, the bins' 3 + 3, cli 4) |
+| clippy `-D warnings` | clean (`--all-features`) | clean: `--all-features`, `--no-default-features`, `--no-default-features --features test-trace` |
+| `cargo fmt --check`, `go vet`, `gofmt -l` | clean | clean |
+| `go test ./...` | 17 pass (24 subtests), 1 skip | 17 pass (24 subtests), 1 skip |
+| fuzz, `run_campaign.sh 120` | `verify_mutate` 6,159 + 6,169, `verify_raw` 29,648, `ffi` 13,509; nothing found | 5,837 + 5,406, 14,274, 16,547; no crash or artifact; 10 inputs of 4–16 bytes flagged slow (71–82 ms against a 34.6 ms baseline), re-timed 20 times each on an idle core at about 33 ms a call with no `SLOW` line: the load artifact of `rust/fuzz/REPORT.md` |
+| `bash crosscheck/run.sh` | 800 tests, 0 mismatches | 800 tests, 0 mismatches |
+| `bash crosscheck/cli.sh` | — | 58 cases, 0 mismatches |
+| `bash rust/check-verifier-only.sh` | — | OK |
 
 ## Open questions for reviewers
 
