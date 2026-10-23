@@ -81,4 +81,6 @@ Run it from `cmd.exe`, whose `<` passes the file byte for byte
 cannot clear copies of the seed outside their own memory.
 
 The two .exe files were run under wine 9.0 on Linux (NOTES.md), not yet on
-Windows itself.
+Windows itself. A human review of the constant-time prover
+(`CT-AUDIT.md`) is still open; NOTES.md asks for it before any real seed
+is used.
