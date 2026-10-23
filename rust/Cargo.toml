@@ -27,6 +27,10 @@ bench-splits = []
 # the dev-dependency below); never enable it in a build that proves with a
 # real seed. It adds nothing without `prover`.
 test-trace = []
+# The command-line tools voleith-prove and voleith-verify (src/bin/). It adds
+# the prover and getrandom, which only voleith-prove uses: the library never
+# calls getrandom.
+cli = ["prover", "dep:getrandom"]
 
 [dependencies]
 # SHAKE256 (FIPS 202); see NOTES.md. Its `zeroize` feature clears the Keccak
@@ -37,6 +41,10 @@ sha3 = { version = "=0.10.9", default-features = false, features = ["zeroize"] }
 # `optimization_barrier` code that 1.9.0 introduced and 1.9.1 had to fix.
 # No default features: `alloc` only, no derive macro (no proc-macro deps).
 zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
+# OS randomness for rho in voleith-prove only (feature `cli`); see NOTES.md,
+# "2026-10-23 tools and verifier-only build". 0.3.4 rather than 0.4.x: a year
+# old, MSRV 1.63, and the version most of the ecosystem runs. No features.
+getrandom = { version = "=0.3.4", default-features = false, optional = true }
 
 [dev-dependencies]
 # Reading the JSON test vectors.
@@ -73,3 +81,18 @@ required-features = ["bench-splits", "prover"]
 name = "prove_verify"
 harness = false
 required-features = ["prover"]
+
+# The command-line tools (feature `cli`); see README.md.
+[[bin]]
+name = "voleith-prove"
+path = "src/bin/voleith-prove.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "voleith-verify"
+path = "src/bin/voleith-verify.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "cli"
+required-features = ["cli"]
