@@ -1051,6 +1051,40 @@ Checks (`63e2570` → this round):
 | `bash rust/build-windows.sh`, `bash rust/check-windows-shadowing.sh` | — | identical builds; strace check passed; shadowing OK |
 | native-static-libs | `-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc` | the same |
 
+### Review round 3 (2026-10-23)
+
+A read-only review of the round-2 fixes. It found the type states, the
+`prctl` fix, the refusal of a fault-injection build and the per-platform
+panic test correct. SPEC.md, the vector files and every proof are
+unchanged. Every command used the system-first PATH of round 2 (Go
+appended at the end); the stand-ins in `/root/.cargo/bin` are still
+there.
+
+| Item | Change | Commit |
+|---|---|---|
+| 1 Exec trace (Medium) | Both builds run under `strace -f -qq -e trace=execve,execveat -e signal=none`. A new `rust/windows/exec_trace.py` joins `<unfinished ...>`/`<... resumed>` lines per PID and counts only `= 0` as a run. It fails on any line it cannot read: a resumed line without its start, a start never resumed, `= ?`, an escaped path, an `execveat` that does not name the program, or anything else. The checker does not rely on strace options to avoid split lines (`-ff` would split the log per process, but the joining has to be right anyway). strace is now required; `--unpublished` builds without it and prints UNPUBLISHED. `windows/test_exec_trace.py` (14 tests) covers recorded split lines, `execveat` forms, ENOENT and unparsable lines. On this machine build 1's trace had two split pairs that the old check had skipped. | `2025d63` |
+| 2 `grep -q` under pipefail (Medium) | Reproduced: with the marker at the start of a 64 MiB file, `strings \| grep -q` reported it absent 3 times out of 3 (status 141). The marker and local-path scans now run `grep -a -c -F` on the binary itself and keep "scan failed" apart from "none found". A built-in positive control requires a file with the marker followed by 64 MiB to be found. The target check greps captured text, and `check-verifier-only.sh` uses `grep -m 5`. | `dece70f` |
+| 3 Paging files (Medium) | README: encrypt every volume holding a paging file (`Get-CimInstance Win32_PageFileUsage`, or the Virtual memory dialog), or confine the paging file to the encrypted system volume; the hibernation advice stays. | `608327e` |
+| 4 NOTES (Low) | Round 2 now records the heap allocation per hash call and the unchanged verify median (20.4 and 20.8 ms). | `567ef40` |
+
+**Windows build.** Both traced builds passed the check (28 exec lines, 12
+programs each) and were identical, and the shadowing check matched. The
+hashes are unchanged from round 2, as are the tool hashes:
+`voleith-prove.exe`
+`4828a2054e7f4f71fb262970c343b6ac2fe98b33adbea7fba2601242d5f8a546`,
+`voleith-verify.exe`
+`d67ceec30efb33f2fcbdedaef1a2f5d09c642a7753205815197ee9173a1663f8`.
+Under wine, the README trial run printed vector 0's y, and the four
+verify commands said `valid`.
+
+Checks: everything listed for round 2, with the same counts: Python 81;
+cargo 42 + 2 ignored; verifier-only 33; cli 58; fault-injection 60;
+cli-profile fault tests 18; Windows under wine 16 per profile; Go 17
+pass, 1 skip; crosscheck 800 and CLI agreement 62, 0 mismatches;
+`check-verifier-only.sh` OK; native-static-libs unchanged. New:
+exec_trace 14 tests. Fuzz 120 s: 6,146 + 6,231, 12,283, 16,896; no
+crash, artifact or slow input.
+
 ## Open questions for reviewers
 
 1. **The security argument.** Does FAEST v1.1 Theorems 1–2 (with BBD+23
