@@ -12,12 +12,14 @@
 //! - `--msg-hex`: an even number of hexadecimal digits, at most 131,070
 //!   (65,535 bytes); may be empty.
 //!
-//! Hexadecimal digits may be upper or lower case.
+//! Hexadecimal digits may be upper or lower case. Values are checked as the
+//! bytes the operating system passed, so a value that is not UTF-8 fails
+//! the same check in all three, and a file name need not be UTF-8.
 
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Read;
 
@@ -29,7 +31,7 @@ pub const MAX_MESSAGE_LEN: usize = 65_535;
 pub fn parse_options(
     args: &[OsString],
     names: &[&'static str],
-) -> Result<HashMap<&'static str, String>, String> {
+) -> Result<HashMap<&'static str, OsString>, String> {
     let mut out = HashMap::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -43,10 +45,7 @@ pub fn parse_options(
         let Some(v) = it.next() else {
             return Err(format!("--{name} needs a value"));
         };
-        let Some(v) = v.to_str() else {
-            return Err(format!("--{name}: not valid UTF-8"));
-        };
-        if out.insert(*name, v.to_string()).is_some() {
+        if out.insert(*name, v.clone()).is_some() {
             return Err(format!("--{name} given twice"));
         }
     }
@@ -59,8 +58,8 @@ pub fn parse_options(
 }
 
 /// K: 1 to 64 printable ASCII bytes.
-pub fn parse_k(s: &str) -> Result<Vec<u8>, String> {
-    let k = s.as_bytes();
+pub fn parse_k(s: &OsStr) -> Result<Vec<u8>, String> {
+    let k = s.as_encoded_bytes();
     if k.is_empty() || k.len() > 64 {
         return Err("--k: K must be 1 to 64 bytes long".into());
     }
@@ -71,15 +70,19 @@ pub fn parse_k(s: &str) -> Result<Vec<u8>, String> {
 }
 
 /// suffix: "0" to "255", no sign, no leading zero.
-pub fn parse_suffix(s: &str) -> Result<u8, String> {
-    let b = s.as_bytes();
+pub fn parse_suffix(s: &OsStr) -> Result<u8, String> {
+    let b = s.as_encoded_bytes();
     let ok = !b.is_empty()
         && b.len() <= 3
         && b.iter().all(u8::is_ascii_digit)
         && (b[0] != b'0' || b.len() == 1);
-    match (ok, s.parse::<u16>()) {
-        (true, Ok(v)) if v <= 255 => Ok(v as u8),
-        _ => Err("--suffix: must be a decimal integer from 0 to 255".into()),
+    let v = b
+        .iter()
+        .fold(0u32, |v, &c| 10 * v + (c.wrapping_sub(b'0')) as u32);
+    if ok && v <= 255 {
+        Ok(v as u8)
+    } else {
+        Err("--suffix: must be a decimal integer from 0 to 255".into())
     }
 }
 
@@ -93,8 +96,8 @@ fn hex_digit(c: u8) -> Option<u8> {
 }
 
 /// Public hexadecimal: an even number of digits, at most `2 * max_bytes`.
-pub fn parse_hex(name: &str, s: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
-    let b = s.as_bytes();
+pub fn parse_hex(name: &str, s: &OsStr, max_bytes: usize) -> Result<Vec<u8>, String> {
+    let b = s.as_encoded_bytes();
     if b.len() > 2 * max_bytes {
         return Err(format!("--{name}: longer than {max_bytes} bytes"));
     }
@@ -108,7 +111,7 @@ pub fn parse_hex(name: &str, s: &str, max_bytes: usize) -> Result<Vec<u8>, Strin
 }
 
 /// y: exactly 32 bytes in hexadecimal.
-pub fn parse_y(s: &str) -> Result<[u8; 32], String> {
+pub fn parse_y(s: &OsStr) -> Result<[u8; 32], String> {
     if s.len() != 64 {
         return Err("--y-hex: must be exactly 64 hexadecimal digits".into());
     }
@@ -194,7 +197,7 @@ pub fn raw_stdin() -> std::io::Result<File> {
 
 /// At most `limit` bytes of the file at `path`, or an error if it is longer
 /// (the caller then knows the proof cannot be valid).
-pub fn read_limited(path: &str, limit: usize) -> std::io::Result<Result<Vec<u8>, ()>> {
+pub fn read_limited(path: &OsStr, limit: usize) -> std::io::Result<Result<Vec<u8>, ()>> {
     let mut v = Vec::with_capacity(limit + 1);
     File::open(path)?
         .take(limit as u64 + 1)
@@ -219,20 +222,21 @@ mod tests {
 
     #[test]
     fn message_limit() {
-        assert!(parse_hex("msg-hex", &"00".repeat(65_535), MAX_MESSAGE_LEN).is_ok());
-        assert!(parse_hex("msg-hex", &"00".repeat(65_536), MAX_MESSAGE_LEN).is_err());
-        assert_eq!(parse_hex("msg-hex", "", MAX_MESSAGE_LEN), Ok(vec![]));
+        let h = |s: &str| parse_hex("msg-hex", OsStr::new(s), MAX_MESSAGE_LEN);
+        assert!(h(&"00".repeat(65_535)).is_ok());
+        assert!(h(&"00".repeat(65_536)).is_err());
+        assert_eq!(h(""), Ok(vec![]));
     }
 
     #[test]
     fn suffix_forms() {
         for (s, v) in [("0", Some(0)), ("7", Some(7)), ("255", Some(255))] {
-            assert_eq!(parse_suffix(s).ok(), v);
+            assert_eq!(parse_suffix(OsStr::new(s)).ok(), v);
         }
         for s in [
-            "", "256", "-1", "+1", "01", "1 ", " 1", "1e2", "0x1", "1000",
+            "", "256", "999", "-1", "+1", "01", "1 ", " 1", "1e2", "0x1", "1000",
         ] {
-            assert!(parse_suffix(s).is_err(), "{s:?}");
+            assert!(parse_suffix(OsStr::new(s)).is_err(), "{s:?}");
         }
     }
 }
