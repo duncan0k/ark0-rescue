@@ -49,6 +49,7 @@ struct Out {
     /// The exit code, or -1 if a signal ended the process.
     code: i32,
     /// The signal that ended the process (Unix).
+    #[cfg_attr(not(feature = "fault-injection"), allow(dead_code))]
     signal: Option<i32>,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
@@ -184,6 +185,7 @@ fn assert_no_seed(x_hex: &str, outputs: &[&[u8]]) {
 }
 
 /// Every file under `dir`, recursively, with its contents.
+#[cfg_attr(not(feature = "fault-injection"), allow(dead_code))]
 fn all_files(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(dir).unwrap() {
@@ -198,6 +200,7 @@ fn all_files(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 }
 
 /// A fresh, empty directory, with a `tmp` subdirectory for TMPDIR.
+#[cfg_attr(not(feature = "fault-injection"), allow(dead_code))]
 fn fresh_dir(name: &str) -> PathBuf {
     let d = tmp(name);
     let _ = std::fs::remove_dir_all(&d);

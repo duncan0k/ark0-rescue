@@ -898,6 +898,75 @@ Go 1.24.7, Python 3.13.17):
 | `bash crosscheck/cli.sh` | — | 58 cases, 0 mismatches |
 | `bash rust/check-verifier-only.sh` | — | OK |
 
+### Review round 1 (2026-10-23)
+
+A read-only review of `ff4ea00` and the design of how the operator uses
+the tools. The operator restores the seed from an encrypted backup on
+their own Windows machine and pipes it into `voleith-prove` once or twice.
+That machine is the trust boundary (the backup's key is on its disk), so
+swap there is not a concern. What must not leak is anything that leaves
+the machine or that someone else sees: command lines, environment,
+logs, crash reports and dumps, temporary files, and what the tool prints
+or writes. SPEC.md, the vector files and every proof are unchanged (the
+same SHA-256 as above; the Rust tests reproduce all proofs).
+
+| Item | Change | Commit |
+|---|---|---|
+| 3 `--suffix` (Medium) | `--suffix 4294967296` overflowed (exit 101 with overflow checks). Length and digits are checked first; 2^32, 2^64, 400 digits and `000` are in the unit, CLI and agreement tests. | `60ea57f` |
+| 1 Secret clearing (High) | SHAKE256 is a sponge of our own over `keccak::f1600` (`src/sym.rs`): it absorbs and squeezes in place, zeroizes its state and is never moved after absorbing. That closes the `digest 0.10` buffer gap of CT-AUDIT; a test compares it with `sha3` (now a dev-dependency); verify speed is unchanged (bench median 20.2–21.2 ms against 21.5 ms). SHA-256 compresses and finalizes in place; HMAC's inner digest is zeroizing; tree seeds and `rnd` are written into their final buffers; `evaluate` returns zeroizing vectors at final size; `read_seed` decodes into a caller-owned buffer. Profile `cli` (release + `panic = "abort"`) builds the tools; the library keeps unwind. The verifier-only library now depends on `keccak` and `zeroize` only. | `78f2a5f` |
+| 2 Publishing (Medium) | Temporary file next to the output, write, `sync_all`, close, then a no-replace rename: `renameat2(RENAME_NOREPLACE)` (fallback link + unlink), link + unlink on other Unix, `MoveFileExW(MOVEFILE_WRITE_THROUGH)` without `MOVEFILE_REPLACE_EXISTING` on Windows; the directory is synced. On failure the temporary file is removed, or the error names it. | `2f0154e` |
+| 5 Crash dumps | Before reading: Linux `prctl(PR_SET_DUMPABLE, 0)` and `RLIMIT_CORE = 0`; Windows `SetErrorMode`, `WerAddExcludedApplication` (current user, persistent), an unhandled-exception filter and a panic hook that call `TerminateProcess` (abort's `__fastfail` would go to WER). Failure: exit 1, nothing read. Not covered (README): another `__fastfail` relies on the WER exclusion alone; LocalDumps were not checked on Windows; a same-user process can read memory while the tool runs. | `2f0154e` |
+| 6 `--require-mlock` | Linux: `mlockall(MCL_CURRENT \| MCL_FUTURE)` before reading, after checking `RLIMIT_MEMLOCK` ≥ 128 MiB or root (peak RSS 17 MB); failure exits 1, nothing read (checked as `nobody` with `ulimit -l 1024`). Elsewhere a usage error. | `2f0154e` |
+| 8 Tests (Low) | Feature `fault-injection` (`VOLEITH_FAULT`): random source, write, sync, naming and removal failures, a fixed ρ, a panic inside `prove`. `tests/cli.rs` scans stdout, stderr and every file of the working directory (TMPDIR inside it) for each 8-byte fragment of seed and ρ: raw, hex either case, decimal lists, u64 decimal, base64 (both alphabets, every alignment), with a positive-control test of the scanner. With `--profile cli` and `VOLEITH_TEST_EXPECT_ABORT=1` the panic must abort (SIGABRT). `check-verifier-only.sh` checks 16 patterns one by one, each with a positive control; this caught a test-binary lookup that had returned nothing, so those checks had passed vacuously. | `2f0154e`, `22a219a` |
+| 4 Windows build (Medium) | cargo runs under `env -i` (`RUSTUP_TOOLCHAIN=1.97.0`, `LC_ALL=C`, `TZ=UTC`, `SOURCE_DATE_EPOCH=0`, proxies and CA files only); refuses unless rustc is 1.97.0 at `2d8144b78` with the target, the four mingw-w64 packages have the recorded versions, and no `.cargo/config(.toml)` exists above the build directory or in CARGO_HOME; linker `x86_64-w64-mingw32-gcc-win32`. | `f720897` |
+| 7 README | The seed is piped from the restore step (GnuPG example, `cmd.exe`); a file only for the public test seed of vector 0. "What stays private" says what is and is not cleared. | `4c20631` |
+
+**Windows build** (Ubuntu 24.04; `gcc-mingw-w64-x86-64-win32` and
+`gcc-mingw-w64-base` 13.2.0-6ubuntu1+26.1, `binutils-mingw-w64-x86-64`
+2.41.90.20240122-1ubuntu1+11.4, `mingw-w64-x86-64-dev` 11.0.1-3build1;
+rustup 1.97.0 with `x86_64-pc-windows-gnu`; profile `cli`). These replace
+the hashes above:
+
+| file | SHA-256 |
+|---|---|
+| `voleith-prove.exe` | `ca4eb060023d917d4d82008311097e200abbf87a8228e9120b71c58103a295c8` |
+| `voleith-verify.exe` | `3abe78fb6d6497eac73bac56e829106bd422d658e73a62f324e4dcfc1f15f5e4` |
+
+The two builds of each run were identical. Three runs gave these hashes:
+one with `RUSTFLAGS`, `CARGO_PROFILE_CLI_OPT_LEVEL`, `CARGO_BUILD_JOBS`,
+`RUSTUP_TOOLCHAIN=nightly`, `CC`, `LC_ALL` and `TZ` set in the calling
+shell, one in a clean shell, and one from a checkout at another path. A
+`.cargo/config.toml` above that checkout made the script refuse.
+
+Under wine 9.0, the README's trial run (test seed from a CRLF file)
+printed vector 0's y. The proof is `valid` for `voleith-verify.exe` and
+for the Rust, Python and Go commands. An existing output file gives
+exit 1 with nothing overwritten; `--suffix 4294967296`,
+`--require-mlock` and a bad seed give exit 2. A fault-injection build's
+panic ended with exit code 3 from `TerminateProcess`.
+`WerAddExcludedApplication` returned success, but wine showed no registry
+entry, so its effect is unverified. Nothing has been run on Windows
+itself.
+
+Checks (as before; `ff4ea00` → this round):
+
+| Check | Before | After |
+|---|---|---|
+| Python unittest | 81 OK | 81 OK |
+| `cargo test --release`, `cargo test` | 40 passed, 2 ignored | 41 passed, 2 ignored (lib 25: the sponge test) |
+| `cargo test --release --no-default-features` | 31 passed | 32 passed |
+| `cargo test --release --features cli` | 50 passed, 2 ignored | 55 passed, 2 ignored (bins 4 + 4, cli 6) |
+| `cargo test --features fault-injection` | — | 56 passed, 2 ignored (cli 7) |
+| `VOLEITH_TEST_EXPECT_ABORT=1 cargo test --profile cli --features fault-injection --test cli --bins` | — | 15 passed; the injected panic aborts |
+| clippy `-D warnings` | clean (3 configurations) | clean: the 3, plus `x86_64-pc-windows-gnu` with `cli` and with `fault-injection` |
+| `cargo fmt --check`, `go vet`, `gofmt -l` | clean | clean |
+| `go test ./...` | 17 pass (24 subtests), 1 skip | 17 pass (24 subtests), 1 skip |
+| fuzz, `run_campaign.sh 120` | 5,837 + 5,406, 14,274, 16,547 | 5,871 + 6,079, 12,328, 16,788; no crash or artifact; 1 input flagged slow (66.6 ms against 33.0 ms), no `SLOW` line when replayed 20 times on an idle core |
+| `bash crosscheck/run.sh` | 800, 0 mismatches | 800, 0 mismatches |
+| `bash crosscheck/cli.sh` | 58 cases, 0 mismatches | 62 cases, 0 mismatches |
+| `bash rust/check-verifier-only.sh` | OK | OK, 16 patterns: 0 in 4 verifier-only builds, each ≥ 1 in its control |
+| native-static-libs | `-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc` | the same |
+
 ## Open questions for reviewers
 
 1. **The security argument.** Does FAEST v1.1 Theorems 1–2 (with BBD+23
