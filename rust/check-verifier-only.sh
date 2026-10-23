@@ -90,7 +90,7 @@ for entry in "${PATTERNS[@]}"; do
     line="$line $label=$n"
     if [ "$n" -ne 0 ]; then
       fail=1
-      grep -E "$re" "$SYMS/$label.txt" | head -5
+      grep -m 5 -E "$re" "$SYMS/$label.txt"
     fi
   done
   c=$(cat "$SYMS/control-O0.txt" "$SYMS/control-tests.txt" | grep -cE "$re" || true)

@@ -184,7 +184,10 @@ clean "$RUSTUP" toolchain install "$TOOLCHAIN" --profile minimal --target "$TARG
 vv=$(clean "$RUSTC" -vV)
 grep -qx "release: $TOOLCHAIN" <<< "$vv" || refuse "rustc is not $TOOLCHAIN"
 grep -qx "commit-hash: $RUSTC_COMMIT" <<< "$vv" || refuse "rustc is not commit $RUSTC_COMMIT"
-clean "$RUSTUP" target list --installed | grep -qx "$TARGET" || refuse "target $TARGET not installed"
+# No pipe into an early-exiting grep: under pipefail its exit could make
+# the writer die of SIGPIPE and the pipeline report a failure.
+targets=$(clean "$RUSTUP" target list --installed) || refuse "cannot list the installed targets"
+grep -qxF "$TARGET" <<< "$targets" || refuse "target $TARGET not installed"
 clean "$RUSTC" --version
 clean "$CARGO" --version
 for t in "${TOOLS[@]}"; do
@@ -252,14 +255,47 @@ for b in "${BINS[@]}"; do
   fi
   cp "$one" "$OUT/$b.exe"
 done
+# The number of places in FILE (lines, to grep -a) that contain one of the
+# fixed strings given as -e arguments. grep reads the whole file itself,
+# with no pipe that an early exit could break, and "the scan failed"
+# (return 2, nothing printed) is kept apart from "none found" (0).
+count_in() {
+  local file=$1 n rc
+  shift
+  n=$(grep -a -c -F "$@" -- "$file") && rc=0 || rc=$?
+  if [ "$rc" -gt 1 ] || ! [[ "$n" =~ ^[0-9]+$ ]]; then
+    return 2
+  fi
+  echo "$n"
+}
+scan() { # label file strings...
+  local label=$1 file=$2 n
+  shift 2
+  if ! n=$(count_in "$file" "$@"); then
+    echo "$label: the scan of $file failed" >&2
+    status=1
+    return
+  fi
+  if [ "$n" -ne 0 ]; then
+    echo "$label: found in $file" >&2
+    status=1
+  fi
+}
+MARKER=VOLEITH_ALLOW_FAULT_INJECTION
+# Positive control: the marker followed by 64 MiB more is still found.
+control=$BASE/windows-build-1/marker-control.bin
+{
+  printf 'xx%s\n' "$MARKER"
+  head -c 67108864 /dev/zero
+} > "$control"
+n=$(count_in "$control" -e "$MARKER") || refuse "the scan of the marker control failed"
+[ "$n" -ge 1 ] || refuse "the marker scan misses a marker followed by 64 MiB"
+echo "marker scan: control with the marker and 64 MiB after it found"
 # The features are exactly `cli` (above); as a second check, the string
 # that a build with the test-only feature fault-injection carries in its
 # refusal message must be absent.
 for b in "${BINS[@]}"; do
-  if strings -a "$OUT/$b.exe" | grep -q VOLEITH_ALLOW_FAULT_INJECTION; then
-    echo "$b.exe was built with fault-injection" >&2
-    status=1
-  fi
+  scan "fault-injection marker in $b.exe" "$OUT/$b.exe" -e "$MARKER"
 done
 # Local paths left in the binaries (there should be none).
 # A path also counts with its separators turned into underscores, as in
@@ -269,10 +305,7 @@ for p in "$ROOT" "$CARGO_HOME" "$RUSTUP_HOME" "$HOME/" /tmp/; do
   leak+=(-e "$p" -e "$(printf '%s' "$p" | tr '/.-' '___')")
 done
 for b in "${BINS[@]}"; do
-  if strings -a "$OUT/$b.exe" | grep -F "${leak[@]}" > /dev/null; then
-    echo "$b.exe contains a local path" >&2
-    status=1
-  fi
+  scan "a local path in $b.exe" "$OUT/$b.exe" "${leak[@]}"
 done
 (cd "$OUT" && sha256sum "${BINS[@]/%/.exe}")
 if [ "$TRACED" = 0 ]; then
