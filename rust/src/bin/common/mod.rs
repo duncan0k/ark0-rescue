@@ -72,18 +72,18 @@ pub fn parse_k(s: &OsStr) -> Result<Vec<u8>, String> {
 /// suffix: "0" to "255", no sign, no leading zero.
 pub fn parse_suffix(s: &OsStr) -> Result<u8, String> {
     let b = s.as_encoded_bytes();
-    let ok = !b.is_empty()
-        && b.len() <= 3
-        && b.iter().all(u8::is_ascii_digit)
-        && (b[0] != b'0' || b.len() == 1);
-    let v = b
-        .iter()
-        .fold(0u32, |v, &c| 10 * v + (c.wrapping_sub(b'0')) as u32);
-    if ok && v <= 255 {
-        Ok(v as u8)
-    } else {
-        Err("--suffix: must be a decimal integer from 0 to 255".into())
+    let err = || "--suffix: must be a decimal integer from 0 to 255".to_string();
+    // Length and characters first: at most 3 digits, so the value below
+    // cannot overflow.
+    if b.is_empty()
+        || b.len() > 3
+        || !b.iter().all(u8::is_ascii_digit)
+        || (b[0] == b'0' && b.len() > 1)
+    {
+        return Err(err());
     }
+    let v = b.iter().fold(0u16, |v, &c| 10 * v + (c - b'0') as u16);
+    u8::try_from(v).map_err(|_| err())
 }
 
 fn hex_digit(c: u8) -> Option<u8> {
@@ -234,7 +234,20 @@ mod tests {
             assert_eq!(parse_suffix(OsStr::new(s)).ok(), v);
         }
         for s in [
-            "", "256", "999", "-1", "+1", "01", "1 ", " 1", "1e2", "0x1", "1000",
+            "",
+            "256",
+            "999",
+            "-1",
+            "+1",
+            "01",
+            "1 ",
+            " 1",
+            "1e2",
+            "0x1",
+            "1000",
+            "4294967296",
+            "18446744073709551616",
+            "000",
         ] {
             assert!(parse_suffix(OsStr::new(s)).is_err(), "{s:?}");
         }
