@@ -21,7 +21,7 @@ The log comes from
       -e signal=none -o LOG PATH ...
 
 `--quiet=attach,personality` is strace's -q without the second q: exits
-are still written (`PID +++ exited with N +++`), which the completeness
+are still written (`PID +++ exited with N +++`), which the end-of-log
 check below needs; -qq would hide them. Every line must have one of these
 forms, or the check fails:
 
@@ -40,11 +40,13 @@ path with an escape (a backslash), and an execveat whose directory is not
 AT_FDCWD or whose path is not absolute (the program it ran cannot be
 named) all fail the check, as does any other line.
 
-The log must be complete: its first line is the root process's exec of
+The log must end normally: its first line is the root process's exec of
 the --root program (= 0), its last line is that process's
 `+++ exited with 0 +++`, and every --expect program ran. An empty log, a
 log cut off after any line before the root's exit, and a log without the
-root's exit all fail.
+root's exit all fail. This catches a trace that strace could not finish
+writing in an ordinary build; it is not a proof against someone who can
+write to the log or the disk during the build (README.md, "Windows").
 
 Every program that ran must be an absolute path without empty, `.` or
 `..` components, and be allowed both as written and resolved
@@ -202,7 +204,7 @@ def check(lines, root, expect, allow, prefixes, build_dirs, real=os.path.realpat
         why = path_error(place)
         if why:
             errors.append("allowed place %s %s" % (place, why))
-    # Completeness: the root's exec first, its exit 0 last, every expected
+    # A normal end: the root's exec first, its exit 0 last, every expected
     # program run.
     if log.first is None:
         errors.append("the log is empty")

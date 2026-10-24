@@ -165,15 +165,32 @@ The tools that run are called by absolute path, never found on `PATH`:
 the linker `/usr/bin/x86_64-w64-mingw32-gcc-win32` with its `collect2`
 and `ld`, `dlltool` (`-Cdlltool`) with the `as` it calls, and the host
 `gcc-13`, `collect2` and `ld` that link getrandom's build script. The
-script checks that each belongs to its package (`dpkg -S`), prints its
-SHA-256 (`../NOTES.md` records them). Both builds run under `strace`
-(`execve` and `execveat`), and `windows/exec_trace.py` fails the build if
-any other program ran than these, the toolchain's and the build scripts,
-or if a line of the trace cannot be read. `strace` is required (package
-`strace`); `bash build-windows.sh --unpublished` builds without it, for
-hashes that are not to be published. `bash check-windows-shadowing.sh`
-puts stand-ins of the same names first on `PATH` and checks that the
-build gives the same two files.
+script checks that each belongs to its package (`dpkg -S`) and, before
+the first build, pins each one (the path, what it resolves to, its
+device, inode and SHA-256, which `../NOTES.md` records); at the end
+nothing pinned may have changed. Both builds run under `strace` (`execve`
+and `execveat`), and `windows/exec_trace.py` fails the build if the trace
+shows another program than these, the toolchain's and the build scripts,
+if a line cannot be read, if it does not end with cargo's exit 0, or if
+strace reported an error; compiler warnings are shown and allowed.
+`strace` is required (package `strace`); `bash build-windows.sh
+--unpublished` builds without it, for hashes that are not to be
+published. `bash check-windows-shadowing.sh` puts stand-ins of the same
+names first on `PATH` and checks that the build gives the same two files.
+
+What these checks are for: they catch a build environment that is
+contaminated by accident, on a build machine that nobody else writes to
+while the build runs: a stray tool earlier on `PATH`, a cargo
+configuration, another toolchain or package version, a fault-injection
+build, a local path in a binary. They do not defend against someone who
+can change that machine during the build. Whoever can write to the
+toolchain, the build directory or the disk while the build runs (fill the
+disk under the trace, swap a tool and swap it back, edit the trace) can
+just as well replace the compiler, and no check run on the same machine
+can rule that out. The trace and the pins are evidence that a normal
+build went as described, not a proof that nothing else happened; what
+others can check is that the same sources and the same recorded
+environment give the same two SHA-256 values.
 
 cargo runs under `env -i` with `LC_ALL=C`, `TZ=UTC`, `SOURCE_DATE_EPOCH=0`
 and nothing else that cargo or rustc reads, apart from the network

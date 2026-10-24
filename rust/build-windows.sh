@@ -20,15 +20,27 @@
 #   versions are recorded, not required: the build script only prints cfg
 #   lines). A tool that is a symbolic link must resolve to a file of the
 #   same package.
-# Both builds run under strace (execve and execveat, with -f, exits
-# written), and windows/exec_trace.py fails the build if any program other
-# than these, the toolchain's own and the build scripts ran, if any line
-# of the trace cannot be parsed (split unfinished/resumed lines are joined
-# per PID), or if the trace is incomplete (it must start with cargo's exec
-# and end with its exit 0). strace's exit status and standard error must
-# be 0 and empty. strace (/usr/bin/strace, package strace) is required: without it
-# the script refuses, unless --unpublished says that the hashes of this
-# build will not be published.
+# Before build 1, every allowed tool and the toolchain directory are
+# pinned (path, resolved path, device, inode, SHA-256); both builds are
+# checked against the pins, and at the end nothing pinned may have
+# changed. Both builds run under strace (execve and execveat, with -f,
+# exits written), and windows/exec_trace.py fails the build if the trace
+# shows a program other than the pinned tools, the toolchain's own and the
+# build scripts, if any line cannot be parsed (split unfinished/resumed
+# lines are joined per PID), or if it does not start with cargo's exec and
+# end with its exit 0; strace's status must be 0 and none of its own
+# messages may appear on standard error (compiler warnings may). strace
+# (/usr/bin/strace, package strace) is required: without it the script
+# refuses, unless --unpublished says that the hashes of this build will
+# not be published.
+#
+# Threat model: these checks catch an accidentally contaminated build
+# environment (a stray tool on PATH, a cargo configuration, another
+# toolchain or package version, a fault-injection build, a local path in a
+# binary) on a build machine that nobody else writes to during the build.
+# They do not defend against someone who can change that machine during
+# the build (fill the disk under the trace, swap a tool and back, edit the
+# trace): whoever can do that can as well replace the compiler.
 # cargo runs under `env -i` with a fixed environment: RUSTUP_TOOLCHAIN,
 # LC_ALL=C, TZ=UTC, SOURCE_DATE_EPOCH=0, the rustflags below, the linker,
 # and nothing else that cargo or rustc reads (no RUSTFLAGS, CARGO_BUILD_*,
