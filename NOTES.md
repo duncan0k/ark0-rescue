@@ -1085,6 +1085,41 @@ pass, 1 skip; crosscheck 800 and CLI agreement 62, 0 mismatches;
 exec_trace 14 tests. Fuzz 120 s: 6,146 + 6,231, 12,283, 16,896; no
 crash, artifact or slow input.
 
+### Review round 4 (2026-10-24)
+
+A read-only review of the round-3 fixes. It found the parser right on
+complete, split and interleaved calls (it also tried 90 more PID
+interleavings), the scans of `build-windows.sh` conclusive, and the
+`--unpublished` refusal right. Nothing under `rust/src/` changed;
+SPEC.md, the vector files and every proof are unchanged. Every command
+used the system-first PATH; the stand-ins in `/root/.cargo/bin` are
+still there.
+
+| Item | Change | Commit |
+|---|---|---|
+| 1 Incomplete trace (Medium) | strace reports a log it cannot write only on stderr and may exit 0 (checked: `-o /dev/full` printed "No space left on device" and exited 0). The traced build's stderr is now captured and must be empty (cargo `--quiet` writes nothing there on success), with exit status 0. strace runs with `--quiet=attach,personality` (`-q`, not `-qq`), so exit lines are written. `exec_trace.py` requires the first line to be the root's exec of `--root` (the rustup proxy for cargo), the last line its `+++ exited with 0 +++`, and every `--expect` program (cargo, rustc, the linker) to have run. Tests: an empty log, the log cut after each of its lines, no root exit, a root exit not last or not 0, a wrong first line; on the real trace, empty, the first 60 lines, and all but the last line each fail. | `023cc6a` |
+| 2 Paths (Medium) | Program paths must be absolute with no empty, `.` or `..` component, and allowed as written and resolved (`os.path.realpath`). An `--allow` entry pins its resolved file (`PATH`, not a link, or `PATH->TARGET`). Prefixes must hold for the resolved path against the resolved directory. Build scripts match `<target dir>/cli/build/<one component>/build-script-build` component by component; the glob option is gone. Tests: the review's two examples and a third, bad components, the build-script layout, a string-only prefix, links that resolve out of place. | `023cc6a` |
+| 3 `check-verifier-only.sh` (Medium) | Every count goes through `count_re`, where grep's status 1 means no match and status 2 or more fails. `nm -a -C` must exit 0, and its symbol lines must equal the `.symtab` entries reported by `readelf -sW` (exact on every listing: 13,427–17,006 per archive, 1,597 and 1,710 per unit-test binary). A self-test (missing file, directory, empty file, empty binary, listing cut in half) must catch each case. Found while doing this: the "LTO" variant forced 16 codegen units, which left the archive unmerged, so it was not the one Bitcoin Core links. It now uses the release profile as it stands, and its archive is byte-for-byte that of a plain `cargo build --release --no-default-features --lib`. | `84fa713` |
+
+**Windows build.** Both traced builds were complete and allowed (130
+lines, 12 programs each), the two builds were identical, and the
+shadowing check matched. The hashes are unchanged:
+`voleith-prove.exe`
+`4828a2054e7f4f71fb262970c343b6ac2fe98b33adbea7fba2601242d5f8a546`,
+`voleith-verify.exe`
+`d67ceec30efb33f2fcbdedaef1a2f5d09c642a7753205815197ee9173a1663f8`.
+Under wine, the trial run printed vector 0's y, and the four verify
+commands said `valid`.
+
+Checks: Python 81; exec_trace 23 tests; cargo 42 + 2 ignored;
+verifier-only 33; cli 58; fault-injection 60; cli-profile fault tests 18;
+Windows under wine 16 per profile; clippy (5 configurations), fmt, go vet
+and gofmt clean; Go 17 pass, 1 skip; crosscheck 800 and CLI agreement 62,
+0 mismatches; `check-verifier-only.sh` OK; native-static-libs unchanged.
+Fuzz 120 s: 5,632 + 6,174, 9,872, 13,641 runs; no crash or artifact.
+One input was flagged slow (83 ms against a 36 ms baseline); replayed
+20 times on an idle core, it printed no `SLOW` line.
+
 ## Open questions for reviewers
 
 1. **The security argument.** Does FAEST v1.1 Theorems 1–2 (with BBD+23
