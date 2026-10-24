@@ -239,32 +239,51 @@ build() { # n
     return
   fi
   # strace exits with cargo's status, but reports its own errors (a log it
-  # cannot write: a full disk, an I/O error) only on standard error and
-  # may still exit 0. Standard error, which cargo --quiet leaves empty on
-  # success, must therefore be empty, and the status 0.
-  local rc=0
-  "${cmd[@]}" 2> "$tdir/stderr.txt" || rc=$?
-  if [ "$rc" -ne 0 ] || [ -s "$tdir/stderr.txt" ]; then
-    cat "$tdir/stderr.txt" >&2
-    refuse "build $1 under strace exited $rc or wrote to standard error"
+  # cannot write: a full disk, an I/O error) on standard error, with lines
+  # that start with "$STRACE: " or "strace: ", and may still exit 0. The
+  # traced build's standard error is read through a pipe that this script
+  # consumes (command substitution), shown in full, and the build fails on
+  # a non-zero status or on any line strace wrote; compiler warnings pass.
+  local rc=0 errout
+  exec 3>&1
+  errout=$("${cmd[@]}" 2>&1 1>&3 3>&-) || rc=$?
+  exec 3>&-
+  if [ -n "$errout" ]; then
+    sed "s/^/build $1 stderr: /" <<< "$errout" >&2
   fi
+  if [ "$rc" -ne 0 ]; then
+    refuse "build $1 under strace exited $rc"
+  fi
+  "$PYTHON" -I "$HERE/windows/exec_trace.py" stderr "$STRACE" <<< "$errout" ||
+    refuse "build $1: strace reported an error (above)"
   # Every program the build executed: the toolchain's, the build
-  # scripts', or one of TOOLS; the log must be complete (the root's exec
-  # first, its exit 0 last, cargo, rustc and the linker run) and every
-  # line readable.
-  local allow=(--root "$CARGO" --allow "$CARGO->$CARGO_HOME/bin/rustup"
-    --expect "$TOOLCHAIN_DIR/bin/cargo" --expect "$TOOLCHAIN_DIR/bin/rustc" --expect "$LINKER"
-    --allow-prefix "$TOOLCHAIN_DIR" --allow-build-scripts "$tdir/cli/build")
-  for t in "${TOOLS[@]}"; do
-    f=${t%%|*}
-    allow+=(--allow "$f->$(readlink -f "$f")")
-  done
-  "$PYTHON" -I "$HERE/windows/exec_trace.py" "$tdir/exec.log" "${allow[@]}" ||
-    refuse "build $1: the exec trace is incomplete, unreadable or shows a program that is not allowed"
+  # scripts', or one of the tools pinned before build 1; the log must start
+  # with the root's exec and end with its exit 0, cargo, rustc and the
+  # linker must have run, and every line must be readable.
+  "$PYTHON" -I "$HERE/windows/exec_trace.py" "$tdir/exec.log" --root "$CARGO" --pins "$PINS" \
+    --expect "$TOOLCHAIN_DIR/bin/cargo" --expect "$TOOLCHAIN_DIR/bin/rustc" --expect "$LINKER" \
+    --allow-build-scripts "$tdir/cli/build" ||
+    refuse "build $1: the exec trace is unreadable, does not end normally or shows a program that is not allowed"
 }
 
+# Pin, once and before build 1, every allowed tool and directory: the
+# path as written, what it resolves to, and that file's device, inode and
+# SHA-256. Both builds are checked against this record, and at the end
+# nothing in it may have changed.
+PINS=$BASE/windows-build-pins.json
+if [ "$TRACED" = 1 ]; then
+  pin_args=(--proxy "$CARGO=$CARGO_HOME/bin/rustup" --dir "$TOOLCHAIN_DIR")
+  for t in "${TOOLS[@]}"; do pin_args+=(--tool "${t%%|*}"); done
+  mkdir -p "$BASE"
+  "$PYTHON" -I "$HERE/windows/exec_trace.py" pin "$PINS" "${pin_args[@]}" ||
+    refuse "cannot pin the tools"
+fi
 build 1
 build 2
+if [ "$TRACED" = 1 ]; then
+  "$PYTHON" -I "$HERE/windows/exec_trace.py" verify "$PINS" ||
+    refuse "a pinned tool or directory changed during the builds"
+fi
 mkdir -p "$OUT"
 status=0
 for b in "${BINS[@]}"; do

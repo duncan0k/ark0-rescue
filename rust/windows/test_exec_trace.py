@@ -206,5 +206,90 @@ class Paths(unittest.TestCase):
         self.assertEqual(run_check(whole(SPLIT + [FAILED.replace("/root/.cargo/bin/cc", "/../x")]))[1], [])
 
 
+class Stderr(unittest.TestCase):
+    def test_warnings_pass_strace_lines_fail(self):
+        self.assertEqual(et.strace_lines("warning: unused variable: `x`\n   Compiling foo\n"), [])
+        self.assertEqual(et.strace_lines(""), [])
+        self.assertEqual(et.strace_lines("note: strace: not at the start\n"), [])
+        text = ("warning: x\n/usr/bin/strace: /dev/full: No space left on device\n"
+                "strace: write: Input/output error\n")
+        self.assertEqual(len(et.strace_lines(text)), 2)
+        self.assertEqual(et.strace_lines("/opt/strace: x\n", "/opt/strace"), ["/opt/strace: x"])
+
+
+class Pins(unittest.TestCase):
+    """pin() and unchanged() on real files in a fresh temporary directory."""
+
+    def setUp(self):
+        import tempfile
+        self.d = os.path.realpath(tempfile.mkdtemp(prefix="exec-trace-test."))
+        self.rustup = os.path.join(self.d, "rustup")
+        with open(self.rustup, "wb") as f:
+            f.write(b"rustup binary")
+        self.tool = os.path.join(self.d, "tool")
+        with open(self.tool, "wb") as f:
+            f.write(b"tool binary")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.d)
+
+    def proxy(self, kind):
+        cargo = os.path.join(self.d, "cargo-" + kind)
+        (os.symlink if kind == "symlink" else os.link)(self.rustup, cargo)
+        return cargo
+
+    def test_proxy_as_symbolic_or_hard_link(self):
+        for kind in ("symlink", "hardlink"):
+            cargo = self.proxy(kind)
+            rec = et.pin([self.tool], [cargo + "=" + self.rustup], [self.d])
+            e = rec["tools"][1]
+            self.assertEqual(e["path"], cargo)
+            self.assertEqual(e["resolved"], self.rustup if kind == "symlink" else cargo)
+            self.assertEqual(et.unchanged(rec), [], kind)
+            # The pinned entry admits the proxy's exec in a log.
+            allow, prefixes = et.pinned_places(rec)
+            log = ['1  execve("%s", ["cargo"], 0x1 /* 1 var */) = 0\n' % cargo,
+                   "1  +++ exited with 0 +++\n"]
+            self.assertEqual(et.check(log, cargo, [], allow, prefixes, [])[1], [], kind)
+
+    def test_proxy_that_is_another_file_fails(self):
+        other = os.path.join(self.d, "cargo-copy")
+        with open(other, "wb") as f:
+            f.write(b"rustup binary")
+        with self.assertRaises(ValueError):
+            et.pin([], [other + "=" + self.rustup], [])
+
+    def test_changes_after_pinning_are_found(self):
+        link = os.path.join(self.d, "ld")
+        os.symlink(self.tool, link)
+        rec = et.pin([link], [], [self.d])
+        self.assertEqual(et.unchanged(rec), [])
+        with open(self.tool, "ab") as f:  # same file, new content
+            f.write(b"!")
+        self.assertTrue(any("SHA-256" in e for e in et.unchanged(rec)))
+        rec = et.pin([link], [], [])
+        evil = os.path.join(self.d, "evil")
+        with open(evil, "wb") as f:
+            f.write(b"evil")
+        os.remove(link)
+        os.symlink(evil, link)  # the link now points elsewhere
+        self.assertTrue(any("now resolves to" in e for e in et.unchanged(rec)))
+        rec = et.pin([self.tool], [], [])
+        with open(self.tool, "rb") as f:
+            same = f.read()
+        new = self.tool + ".new"
+        with open(new, "wb") as f:  # replaced by a copy: another inode
+            f.write(same)
+        os.replace(new, self.tool)
+        errors = et.unchanged(rec)
+        self.assertTrue(any("another file" in e for e in errors), errors)
+
+    def test_bad_paths_are_not_pinned(self):
+        for p in ("relative", self.d + "/../x", self.d + "//tool"):
+            with self.assertRaises(ValueError):
+                et.pin([p], [], [])
+
+
 if __name__ == "__main__":
     unittest.main()
