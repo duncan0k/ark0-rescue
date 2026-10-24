@@ -113,9 +113,10 @@ list_symbols() { # binary listing
 }
 
 # The self-test is called as `self_test || fail=1`, where bash does not
-# apply `set -e`: every step below checks its own status, and every
-# defective sample is checked to have the defect it is meant to have, so
-# that a sample that failed to be made cannot pass as a caught defect.
+# apply `set -e`: each step that makes a sample or a listing, or computes
+# a value from one, checks its status (`|| return 1`), and every defective
+# sample is checked to have the defect it is meant to have, so that a
+# sample that failed to be made cannot pass as a caught defect.
 st_fail() {
   echo "self-test: $*" >&2
   return 1
@@ -211,12 +212,12 @@ self_test() {
     total=$(wc -l < "$fx") || st_fail "cannot read $fx" || return 1
     full=$(count_re "$fx" "$SYMLINE") || st_fail "cannot scan $fx" || return 1
     [ "$full" -eq "$total" ] || st_fail "$fx has lines that are not symbol lines" || return 1
-    cut_after_type "$fx" > "$d/cut-$(basename "$fx")" || st_fail "cannot cut $fx" || return 1
-    n=$(wc -l < "$d/cut-$(basename "$fx")") || return 1
+    cut_after_type "$fx" > "$d/cut-${fx##*/}" || st_fail "cannot cut $fx" || return 1
+    n=$(wc -l < "$d/cut-${fx##*/}") || return 1
     [ "$n" -eq "$total" ] || st_fail "the cut of $fx has another line count" || return 1
-    n=$(grep -cE -- '^([0-9a-f]{8}|[0-9a-f]{16}| {8}| {16}) [A-Za-z?-] $' "$d/cut-$(basename "$fx")") &&
+    n=$(grep -cE -- '^([0-9a-f]{8}|[0-9a-f]{16}| {8}| {16}) [A-Za-z?-] $' "$d/cut-${fx##*/}") &&
       [ "$n" -eq 1 ] || st_fail "the cut of $fx does not end a line after the type letter" || return 1
-    cut=$(count_re "$d/cut-$(basename "$fx")" "$SYMLINE") || return 1
+    cut=$(count_re "$d/cut-${fx##*/}" "$SYMLINE") || return 1
     [ "$cut" -eq "$((full - 1))" ] || st_fail "the cut line of $fx is still counted" || return 1
   done
   for bad in "$d/missing.a" "$d/empty.txt"; do
