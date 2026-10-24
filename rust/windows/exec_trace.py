@@ -1,15 +1,21 @@
 """Check an strace log of execve and execveat calls against an allow-list.
 
 Usage:
-  python3 -I exec_trace.py pin PINS.json [--tool PATH]... [--proxy PATH=OTHER]... [--dir DIR]...
+  python3 -I exec_trace.py pin PINS.json [--tool PATH]... [--proxy PATH OTHER]... [--dir DIR]...
   python3 -I exec_trace.py LOG --root PATH [--expect PATH]... [--pins PINS.json]
-      [--allow PATH]... [--allow-prefix DIR]... [--allow-build-scripts DIR]...
+      [--allow PATH]... [--allow-link PATH TARGET]... [--allow-prefix DIR]...
+      [--allow-build-scripts DIR]...
+
+Every path is a whole argument of its own (--proxy and --allow-link take
+two), never two paths joined by a separator, so paths may hold `=`,
+`->` or spaces.
   python3 -I exec_trace.py verify PINS.json
   python3 -I exec_trace.py stderr STRACE_PATH < standard error of the traced build
 
-`pin` records, before the builds, each allowed tool and directory as
-written and resolved, with the device, inode and (for a tool) SHA-256 of
-what it resolves to; a --proxy PATH=OTHER must be the same file as OTHER
+`pin` records, before the builds, for each tool: the path as written,
+what it resolves to, and that file's device, inode and SHA-256; for each
+directory: the path, what it resolves to, and its device and inode (no
+hash). A --proxy PATH OTHER must be the same file as OTHER
 (os.path.samefile), which holds whether rustup installed PATH as a
 symbolic link to OTHER or as a hard link of it. `--pins` checks a log
 against that fixed record instead of resolving the tools again, and
@@ -51,10 +57,10 @@ write to the log or the disk during the build (README.md, "Windows").
 Every program that ran must be an absolute path without empty, `.` or
 `..` components, and be allowed both as written and resolved
 (os.path.realpath, against the resolved allowed place): an --allow entry
-exactly, which is `PATH` (resolving to itself: not a link) or
-`PATH->TARGET` (a link that must resolve to TARGET), so that a tool that
-has become a link elsewhere fails; under an --allow-prefix directory
-(`DIR` or `DIR->RESOLVED`, against the resolved form); or,
+exactly, which is --allow PATH (resolving to itself: not a link) or
+--allow-link PATH TARGET (a link that must resolve to TARGET), so that a
+tool that has become a link elsewhere fails; under an --allow-prefix
+directory (or a pinned directory, against its pinned resolved form); or,
 for --allow-build-scripts
 DIR, exactly DIR/<one component>/build-script-build (cargo's layout of
 host build scripts: <target dir>/<profile>/build/<package>-<hash>/).
@@ -180,9 +186,12 @@ def _build_script(p, d):
 
 
 def split_allow(a):
-    """(path, the file it must resolve to) of an --allow entry."""
-    path, sep, target = a.partition("->")
-    return path, (target if sep else path)
+    """(path, the file it must resolve to) of an allowed tool or place: a
+    pair as given, or a path that must resolve to itself. Paths are never
+    joined into one string, so a path may hold any character."""
+    if isinstance(a, tuple):
+        return a
+    return a, a
 
 
 def allowed(p, allow, prefixes, build_dirs, real=os.path.realpath):
@@ -247,13 +256,13 @@ def _identity(path):
 def pin(tools, proxies, dirs):
     """The pin record: for each tool, the path as written, the file it
     resolves to (os.path.realpath), that file's device, inode and SHA-256;
-    for each proxy PATH=OTHER, the same, after checking that PATH is the
+    for each proxy (PATH, OTHER), the same, after checking that PATH is the
     same file as OTHER (os.path.samefile: a symbolic link to it or a hard
     link of it); for each directory, the path, its resolved form, device
     and inode. Raises ValueError on a bad path or a proxy that is another
     file."""
     rec = {"tools": [], "dirs": []}
-    for path, same_as in [(t, None) for t in tools] + [tuple(p.split("=", 1)) for p in proxies]:
+    for path, same_as in [(t, None) for t in tools] + [tuple(p) for p in proxies]:
         why = path_error(path)
         if why:
             raise ValueError("%s %s" % (path, why))
@@ -299,22 +308,36 @@ def unchanged(rec):
 
 def pinned_places(rec):
     """(--allow entries, --allow-prefix entries) from a pin record."""
-    return ([e["path"] + "->" + e["resolved"] for e in rec["tools"]],
-            [e["path"] + "->" + e["resolved"] for e in rec["dirs"]])
+    return ([(e["path"], e["resolved"]) for e in rec["tools"]],
+            [(e["path"], e["resolved"]) for e in rec["dirs"]])
 
 
-def _pairs(rest):
-    if len(rest) % 2:
-        raise ValueError("options take one value each")
-    return list(zip(rest[::2], rest[1::2]))
+def options(argv, arity):
+    """[(option, [values])] for ARGV, where ARITY maps each option to its
+    number of values; every value is a whole argument, never split."""
+    out, i = [], 0
+    while i < len(argv):
+        opt = argv[i]
+        if opt not in arity:
+            raise ValueError("unknown option %s" % opt)
+        n = arity[opt]
+        vals = argv[i + 1:i + 1 + n]
+        if len(vals) != n:
+            raise ValueError("%s takes %d value(s)" % (opt, n))
+        out.append((opt, vals))
+        i += 1 + n
+    return out
 
 
 def main_pin(argv):
-    """pin OUT.json [--tool PATH]... [--proxy PATH=OTHER]... [--dir DIR]..."""
+    """pin OUT.json [--tool PATH]... [--proxy PATH OTHER]... [--dir DIR]..."""
     import json
     out, tools, proxies, dirs = argv[0], [], [], []
-    for opt, val in _pairs(argv[1:]):
-        {"--tool": tools, "--proxy": proxies, "--dir": dirs}[opt].append(val)
+    for opt, vals in options(argv[1:], {"--tool": 1, "--proxy": 2, "--dir": 1}):
+        if opt == "--proxy":
+            proxies.append(tuple(vals))
+        else:
+            {"--tool": tools, "--dir": dirs}[opt].append(vals[0])
     rec = pin(tools, proxies, dirs)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(rec, f, indent=1, sort_keys=True)
@@ -371,34 +394,40 @@ def main(argv):
     except (ValueError, KeyError, OSError, IndexError) as e:
         sys.stderr.write("exec_trace.py: %s: %s\n" % (argv[0], e))
         return 1
-    log, rest = argv[0], argv[1:]
+    try:
+        return main_check(argv[0], argv[1:])
+    except (ValueError, OSError, UnicodeDecodeError, KeyError) as e:
+        sys.stderr.write("exec_trace.py: %s\n" % e)
+        return 1
+
+
+def main_check(log, rest):
+    """LOG --root PATH [--expect PATH]... [--pins PINS.json] [--allow PATH]...
+    [--allow-link PATH TARGET]... [--allow-prefix DIR]... [--allow-build-scripts DIR]..."""
+    import json
     root, expect, allow, prefixes, build_dirs = None, [], [], [], []
-    if len(rest) % 2:
-        sys.stderr.write("exec_trace.py: options take one value each\n")
-        return 2
-    for opt, val in zip(rest[::2], rest[1::2]):
+    arity = {"--root": 1, "--expect": 1, "--allow": 1, "--allow-link": 2, "--allow-prefix": 1,
+             "--allow-build-scripts": 1, "--pins": 1}
+    for opt, vals in options(rest, arity):
         if opt == "--root":
-            root = val
+            root = vals[0]
         elif opt == "--expect":
-            expect.append(val)
+            expect.append(vals[0])
         elif opt == "--allow":
-            allow.append(val)
+            allow.append(vals[0])
+        elif opt == "--allow-link":
+            allow.append(tuple(vals))
         elif opt == "--allow-prefix":
-            prefixes.append(val)
+            prefixes.append(vals[0])
         elif opt == "--allow-build-scripts":
-            build_dirs.append(val)
-        elif opt == "--pins":
-            import json
-            with open(val, encoding="utf-8") as f:
+            build_dirs.append(vals[0])
+        else:  # --pins
+            with open(vals[0], encoding="utf-8") as f:
                 a, p = pinned_places(json.load(f))
             allow.extend(a)
             prefixes.extend(p)
-        else:
-            sys.stderr.write("exec_trace.py: unknown option %s\n" % opt)
-            return 2
     if root is None:
-        sys.stderr.write("exec_trace.py: --root is required\n")
-        return 2
+        raise ValueError("--root is required")
     with open(log, encoding="utf-8", errors="strict") as f:
         lines = f.readlines()
     progs, errors = check(lines, root, expect, allow, prefixes, build_dirs)

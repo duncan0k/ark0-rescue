@@ -166,9 +166,10 @@ the linker `/usr/bin/x86_64-w64-mingw32-gcc-win32` with its `collect2`
 and `ld`, `dlltool` (`-Cdlltool`) with the `as` it calls, and the host
 `gcc-13`, `collect2` and `ld` that link getrandom's build script. The
 script checks that each belongs to its package (`dpkg -S`) and, before
-the first build, pins each one (the path, what it resolves to, its
-device, inode and SHA-256, which `../NOTES.md` records); at the end
-nothing pinned may have changed. Both builds run under `strace` (`execve`
+the first build, pins each one (the path, the file it resolves to, and
+that file's device, inode and SHA-256, which `../NOTES.md` records) and
+the toolchain directory (path, resolved path, device and inode, no hash);
+at the end nothing pinned may have changed. Both builds run under `strace` (`execve`
 and `execveat`), and `windows/exec_trace.py` fails the build if the trace
 shows another program than these, the toolchain's and the build scripts,
 if a line cannot be read, if it does not end with cargo's exit 0, or if

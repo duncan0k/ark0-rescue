@@ -40,7 +40,7 @@ CHILD_EXITS = ["5221  +++ exited with 0 +++\n", "5223  +++ exited with 0 +++\n",
                "5224  +++ exited with 1 +++\n", "5240  +++ killed by SIGKILL +++\n"]
 ROOT_EXIT = "5200  +++ exited with 0 +++\n"
 
-ALLOW = [PROXY + "->/root/.cargo/bin/rustup", "/usr/bin/x86_64-w64-mingw32-dlltool",
+ALLOW = [(PROXY, "/root/.cargo/bin/rustup"), "/usr/bin/x86_64-w64-mingw32-dlltool",
          "/usr/bin/x86_64-w64-mingw32-as"]
 LINKS = {PROXY: "/root/.cargo/bin/rustup"}
 
@@ -242,7 +242,7 @@ class Pins(unittest.TestCase):
     def test_proxy_as_symbolic_or_hard_link(self):
         for kind in ("symlink", "hardlink"):
             cargo = self.proxy(kind)
-            rec = et.pin([self.tool], [cargo + "=" + self.rustup], [self.d])
+            rec = et.pin([self.tool], [(cargo, self.rustup)], [self.d])
             e = rec["tools"][1]
             self.assertEqual(e["path"], cargo)
             self.assertEqual(e["resolved"], self.rustup if kind == "symlink" else cargo)
@@ -258,7 +258,7 @@ class Pins(unittest.TestCase):
         with open(other, "wb") as f:
             f.write(b"rustup binary")
         with self.assertRaises(ValueError):
-            et.pin([], [other + "=" + self.rustup], [])
+            et.pin([], [(other, self.rustup)], [])
 
     def test_changes_after_pinning_are_found(self):
         link = os.path.join(self.d, "ld")
@@ -284,6 +284,31 @@ class Pins(unittest.TestCase):
         os.replace(new, self.tool)
         errors = et.unchanged(rec)
         self.assertTrue(any("another file" in e for e in errors), errors)
+
+    def test_paths_with_separators(self):
+        # A CARGO_HOME with `=`, `->` and a space: pinned and checked as is.
+        home = os.path.join(self.d, "a=b->c d")
+        os.mkdir(home)
+        rustup = os.path.join(home, "rustup")
+        with open(rustup, "wb") as f:
+            f.write(b"rustup")
+        cargo = os.path.join(home, "cargo")
+        os.symlink(rustup, cargo)
+        pins = os.path.join(self.d, "pins.json")
+        self.assertEqual(et.main(["pin", pins, "--proxy", cargo, rustup, "--dir", home]), 0)
+        log = os.path.join(self.d, "log")
+        with open(log, "w") as f:
+            f.write('1  execve("%s", ["cargo"], 0x1 /* 1 var */) = 0\n1  +++ exited with 0 +++\n' % cargo)
+        self.assertEqual(et.main([log, "--root", cargo, "--pins", pins]), 0)
+        self.assertEqual(et.main(["verify", pins]), 0)
+        self.assertEqual(et.main([log, "--root", cargo, "--allow-link", cargo, rustup]), 0)
+
+    def test_options(self):
+        self.assertEqual(et.options(["--proxy", "a=b", "c", "--tool", "x"], {"--proxy": 2, "--tool": 1}),
+                         [("--proxy", ["a=b", "c"]), ("--tool", ["x"])])
+        for bad in (["--proxy", "a"], ["--tool"], ["--other", "x"], ["x"]):
+            with self.assertRaises(ValueError):
+                et.options(bad, {"--proxy": 2, "--tool": 1})
 
     def test_bad_paths_are_not_pinned(self):
         for p in ("relative", self.d + "/../x", self.d + "//tool"):

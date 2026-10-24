@@ -21,9 +21,11 @@
 #   lines). A tool that is a symbolic link must resolve to a file of the
 #   same package.
 # Before build 1, every allowed tool and the toolchain directory are
-# pinned (path, resolved path, device, inode, SHA-256); both builds are
-# checked against the pins, and at the end nothing pinned may have
-# changed. Both builds run under strace (execve and execveat, with -f,
+# pinned: for a tool, the path, the file it resolves to, and that file's
+# device, inode and SHA-256; for the directory, the path, what it resolves
+# to, and its device and inode (no hash: its contents are the toolchain's,
+# checked by version and commit above). Both builds are checked against
+# the pins, and at the end nothing pinned may have changed. Both builds run under strace (execve and execveat, with -f,
 # exits written), and windows/exec_trace.py fails the build if the trace
 # shows a program other than the pinned tools, the toolchain's own and the
 # build scripts, if any line cannot be parsed (split unfinished/resumed
@@ -195,7 +197,7 @@ RUSTC=$CARGO_HOME/bin/rustc
 # The toolchain, exactly.
 clean "$RUSTUP" toolchain install "$TOOLCHAIN" --profile minimal --target "$TARGET" > /dev/null 2>&1 ||
   refuse "cannot install the toolchain $TOOLCHAIN with $TARGET"
-vv=$(clean "$RUSTC" -vV)
+vv=$(clean "$RUSTC" -vV) || refuse "rustc -vV failed"
 grep -qx "release: $TOOLCHAIN" <<< "$vv" || refuse "rustc is not $TOOLCHAIN"
 grep -qx "commit-hash: $RUSTC_COMMIT" <<< "$vv" || refuse "rustc is not commit $RUSTC_COMMIT"
 # No pipe into an early-exiting grep: under pipefail its exit could make
@@ -207,9 +209,22 @@ clean "$CARGO" --version
 for t in "${TOOLS[@]}"; do
   IFS='|' read -r f pkg tpkg <<< "$t"
   pkg=${tpkg:-$pkg}
-  echo "tool $(sha256sum "$f" | cut -d' ' -f1) $f$([ -L "$f" ] && echo " -> $(readlink -f "$f")") ($pkg $(dpkg-query -W -f='${Version}' "$pkg"))"
+  # Each value on its own, so that a failure is not printed as an empty
+  # field.
+  h=$(sha256sum -- "$f") || refuse "cannot hash $f"
+  h=${h%% *}
+  r=$(readlink -f -- "$f") || refuse "cannot resolve $f"
+  v=$(dpkg-query -W -f='${Version}' "$pkg") || refuse "cannot read the version of $pkg"
+  if [ "$r" = "$f" ]; then
+    echo "tool $h $f ($pkg $v)"
+  else
+    echo "tool $h $f -> $r ($pkg $v)"
+  fi
 done
-TOOLCHAIN_DIR=$(dirname "$(dirname "$(clean "$RUSTUP" which rustc)")")
+rustc_path=$(clean "$RUSTUP" which rustc) || refuse "rustup which rustc failed"
+TOOLCHAIN_DIR=${rustc_path%/bin/rustc}
+[ "$TOOLCHAIN_DIR/bin/rustc" = "$rustc_path" ] && [ -d "$TOOLCHAIN_DIR" ] ||
+  refuse "unexpected rustc path: $rustc_path"
 
 build() { # n
   local tdir=$BASE/windows-build-$1
@@ -232,7 +247,8 @@ build() { # n
   local bin_args=()
   for b in "${BINS[@]}"; do bin_args+=(--bin "$b"); done
   local encoded
-  encoded=$(IFS=$'\x1f'; echo "${flags[*]}")
+  # printf, not echo: echo would take a leading -n or -e as an option.
+  encoded=$(IFS=$'\x1f'; printf '%s' "${flags[*]}")
   local trace=()
   if [ "$TRACED" = 1 ]; then
     mkdir -p "$tdir"
@@ -278,13 +294,14 @@ build() { # n
     refuse "build $1: the exec trace is unreadable, does not end normally or shows a program that is not allowed"
 }
 
-# Pin, once and before build 1, every allowed tool and directory: the
-# path as written, what it resolves to, and that file's device, inode and
-# SHA-256. Both builds are checked against this record, and at the end
-# nothing in it may have changed.
+# Pin, once and before build 1, every allowed tool (path as written, the
+# file it resolves to, that file's device, inode and SHA-256) and the
+# toolchain directory (path, resolved path, device, inode; no hash). Both
+# builds are checked against this record, and at the end nothing in it
+# may have changed.
 PINS=$BASE/windows-build-pins.json
 if [ "$TRACED" = 1 ]; then
-  pin_args=(--proxy "$CARGO=$CARGO_HOME/bin/rustup" --dir "$TOOLCHAIN_DIR")
+  pin_args=(--proxy "$CARGO" "$CARGO_HOME/bin/rustup" --dir "$TOOLCHAIN_DIR")
   for t in "${TOOLS[@]}"; do pin_args+=(--tool "${t%%|*}"); done
   mkdir -p "$BASE"
   "$PYTHON" -I "$HERE/windows/exec_trace.py" pin "$PINS" "${pin_args[@]}" ||
