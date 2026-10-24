@@ -1,7 +1,9 @@
-# VOLEitH rescue proofs: specification v0.2, revision 2
+# VOLEitH rescue proofs: specification v0.2, revision 3
 
-Status: **draft for review, not frozen**. v0.2, revision 2 (2026-10-15).
-Nothing here has had an external cryptographic review. v0.2 replaces v0.1,
+Status: **v0.2 is fixed**: version byte `0x02` is the version that the Ark-0
+signet rescue lane (M4-R1) verifies. v0.2, revision 3 (2026-10-24); revisions
+change wording only, and any change to the protocol takes a new version byte
+(§16). Nothing here has had an external cryptographic review. v0.2 replaces v0.1,
 which was never deployed: the construction is the same, but the 128
 challenge bits are spread over 24 GGM trees of mixed depth (8 trees of depth
 6, then 16 of depth 5) instead of 16 trees of depth 8, because verification
@@ -36,6 +38,26 @@ order for the circuit (§7.4, §7.6), per-gadget test circuits
 read (§11), a symbol table (§1.1) and a description of the vector files
 (Appendix A). §16 lists every change.
 
+Revision 3 changes wording only, after a review of the final version (below).
+The version byte, tags, parameters, proof format and all vector files are
+unchanged. It describes the Rust prover as it now is (§13.3, §14), splits
+§12.1 item 4 into what the node enforces and what wallets and operators must
+do, tightens the bookkeeping of §13.1, §13.2, §13.4 and §13.5, and states that
+`0x02` is fixed (§16).
+
+**Review of the final version.** On 2026-10-24 the same two AI models, again
+not external cryptographers, reviewed revision 2 with the Rust verifier and
+the M4-R1 consensus rules. gpt-6-astra (xhigh): **NOT-YET**, on one point: the
+consensus rules do not make a rescue depend on the freeze being in force,
+which the M4-R1 design chose deliberately (§12.1 item 4). Fable 5.1 (max):
+**SHIP**, on condition that the fixes to the text ship with the lane, which
+runs only on a signet whose coins have no value and says it has had no
+external review. Neither found a forgery, a malleability of the proof encoding
+or a way around the consensus rules; astra's point is a rule it finds missing,
+not a way around one. Fable 5.1 then checked revision 3 itself (SHIP); its
+wording fixes are in this revision. NOTES.md, "2026-10-24 review of the final
+version", lists every finding and what was done about it.
+
 This document specifies a non-interactive zero-knowledge proof of knowledge,
 used as a signature of knowledge on a public message, for the signet rescue
 lane. It follows the FAEST v1.1 VOLE-in-the-head (VOLEitH) skeleton with the
@@ -52,10 +74,11 @@ that is a bug in one of them, and the vectors pin the intended behaviour.
 References to `NOTES.md` (measurements, history) and to code are informative;
 no conformance requirement depends on them.
 
-Sources: the approved plan `R1-voleith-plan.md`, the rescue-lane interface in
-`m4-design-2026-10-14.md` §11 and the owner decisions in `m4-plan-2026-10-14.md`
-§9 (all in the scopeScan repository, `docs/quantum-program/`). External
-references are listed in §17.
+Sources: the project's plan for this proof system (R1) and the rescue-lane
+interface of its M4 design (requirements 4R-1 to 4R-9), neither of which is
+published; §12 restates what this text needs from them. The rescue lane itself
+is specified by the M4-R1 patches of bitcoin-p2mr-patches
+(`doc/p2mr-rescue.md`). External references are listed in §17.
 
 ## Contents
 
@@ -880,9 +903,10 @@ Properties:
 
 ## 12. Use in the rescue lane
 
-This section restates the interface of `m4-design-2026-10-14.md` §11 and lists
-what the consensus layer must enforce (§12.1); the consensus details belong
-to the M4-R design.
+This section restates the rescue-lane interface (requirements 4R-1 to 4R-9 of
+the M4 design) and lists what the consensus layer must enforce (§12.1). The
+consensus rules themselves are those of the M4-R1 patches,
+`doc/p2mr-rescue.md`.
 
 - The proof is carried in the annex as one element, at most one proof per
   input (4R-3, 4R-9). Statement 0x01 proofs are 130,218 bytes (130,218 WU).
@@ -902,8 +926,10 @@ A valid proof shows only that its maker knew some `x` with
 `HMAC-SHA256(K, x ‖ suffix) = y`, and binds that to `m`. None of the following
 is a property of the proof system; if the rescue-lane rules miss one, coins
 can be stolen however sound the proof is. They are hard requirements on the
-M4-R design (from the 2026-10-14 internal reviews; not yet checked against
-that design). The node or the rescue adapter performs these checks, never
+M4-R design (from the 2026-10-14 internal reviews). The 2026-10-24 review
+checked them against the M4-R1 rules: items 1–3 are consensus rules there,
+and item 4 is partly relay policy and partly up to wallets and operators.
+The node or the rescue adapter performs these checks, never
 `verify`: `verify` performs exactly the checks of §11, so it accepts any
 32-byte `y` and any `m` of up to 65,535 bytes.
 
@@ -922,20 +948,47 @@ that design). The node or the rescue adapter performs these checks, never
    public-key commitment (32). The library accepts messages of up to 65,535
    bytes; the rescue adapter must accept only this form.
 4. **Publishing `y = d` burns the key.** A rescue spend puts the Schnorr secret
-   key `d` (`= y`) in the mempool, where classical observers see it too (a
-   quantum attacker could derive `d` from `P` anyway). So: all frozen outputs
-   of a key are rescued together, in one transaction, so that none of them
-   waits on the freeze rules alone while `d` is public; outputs paid to the
-   same `P` that are not frozen are moved by an ordinary spend before the
-   first rescue; the freeze covers every output paid to `P`, including those
-   created after it; and wallets never reuse `P` or `d` on other networks or
-   protocols.
+   key `d` (`= y`) in the mempool and in a block, where classical observers
+   see it too (a quantum attacker could derive `d` from `P` anyway). From then
+   on, anyone can spend with `d` every output of `P` whose elliptic curve
+   checks still work.
+   - *The node's part (M4-R1).* The mempool takes a rescue spend only when
+     the elliptic curve checks of leaf version `0xe0` are disabled for the
+     next block and, over P2P, only from peers with `noban` permission
+     (`sendrawtransaction` is not limited by this); a standard transaction
+     holds at most three rescue inputs. The consensus rule itself does not
+     depend on the freeze. In M4-R1 the freeze reaches the script interpreter
+     as a restricting flag; a rescue conditioned on it would make that flag
+     relax as well as restrict, against the rule that an added flag only ever
+     makes fewer spends valid, and would make a rescue's validity depend on
+     chain state beyond the block's height, the leaf and the transaction. Nor
+     would such a rule help after a reorganization that undoes the freeze,
+     when `d` is public and the checks work again. What it would prevent, a
+     rescue that a block producer includes while the checks still work, is
+     left to the operator: a block producer that includes a rescue
+     transaction directly, outside the mempool, must check this itself, and
+     on Ark-0 the lane is to open only once the freeze is in force (its height
+     is not yet set). A rescue is safe only while no reorganization undoes the
+     freeze; on a signet, only its block producer can make one.
+   - *The wallet's and the operator's part, which the node cannot check.*
+     Rescue all frozen outputs of a key together, in one transaction, so that
+     none of them waits on the freeze rules alone while `d` is public. More
+     than three need a transaction that a block producer includes directly,
+     and a block holds about 30 rescue inputs (each carries about 130 kB of
+     witness), so keep the outputs per key few. Before the first rescue, move
+     by an ordinary spend every output that `P` can spend some other way (a
+     leaf of version `0xc0`, a P2TR output with the same key, a legacy or
+     witness v0 script): the freeze covers an output only where `P` is checked
+     in a leaf of version `0xe0`, regardless of when the output was created.
+     Never reuse `P` or `d` on other networks or protocols, and pay nothing
+     more to `P` once it is burned.
 
 Not preconditions of this specification, but for the same design:
 validation weight and relay policy must price a well-formed invalid proof
-like a valid one (§11), and the weight was calibrated on one machine (Zen 2,
-NOTES.md); slower validators need a safety factor or a per-block or per-peer
-limit.
+like a valid one (§11), and slower validators need a safety factor or a
+per-block or per-peer limit. M4-R1 charges 130,000 weight units per rescue
+check, set from a single-check gate with a factor of 1.5 and a whole-block
+gate (`doc/p2mr-rescue.md`).
 
 ## 13. Security
 
@@ -947,6 +1000,12 @@ reviews; the restatement is argued, not proven.
 - **Random oracles.** Every `SHAKE256[name]` is modelled as an independent
   random oracle (classical ROM). `rnd` may alternatively be modelled as a PRF
   keyed by `x` and `ρ`.
+- **HMAC-SHA256 as a random function** (revision 3; a heuristic, used only for
+  the multi-target accounting below). `K` is public and the secret `x` is in
+  the message, so the PRF security of HMAC does not apply; the model is that
+  of SHA-256's compression function as a random oracle, under which the
+  values of one `x` for different `(K, suffix)` are independent. Knowledge
+  soundness (§13.2) does not use it.
 - **Knowledge soundness holds for every statement.** The extractor of §13.2
   works whatever `(K, suffix, y)` is and however it was chosen; a spender who
   picks `K` or `suffix` does not weaken it. (v0.2 assumed "honest keys" here
@@ -959,7 +1018,11 @@ reviews; the restatement is argued, not proven.
   choice of `(K, suffix)` changes the function, not the target. For `y` the
   HMAC output on a uniform 256-bit seed, that is a `2^256`-scale problem
   classically and `2^128` with Grover; with `N` target keys the loss is at most
-  a factor `N`, irrelevant at 256 bits. The relation is length-preserving, so
+  a factor `N`, irrelevant at 256 bits. The `N` targets may share a seed (one
+  key per label and suffix): under the model above, the values for different
+  `(K, suffix)` are independent, so the factor `N` covers that case too, and
+  zero knowledge (§13.3) is what keeps a proof for one suffix from helping
+  with another. The relation is length-preserving, so
   the extractor may return a different preimage; that suffices for the rescue
   lane, which needs knowledge of *a* preimage.
 - **Seed entropy.** The above assumes a seed `x` with 256 bits of entropy.
@@ -968,7 +1031,8 @@ reviews; the restatement is argued, not proven.
   attacker is about `min(2^64, 2^{H(x)/2})`, where `2^64` is Grover on `Δ` or on a
   hidden seed (§13.6). A wallet seed with less than 128 bits of entropy makes
   the lane weaker than the proof system.
-- **External preconditions.** The consensus layer enforces §12.1 items 1–4.
+- **External preconditions.** The consensus layer enforces §12.1 items 1–3
+  and the node's part of item 4; wallets and operators do the rest of item 4.
   Without them nothing in §13 protects any coins.
 
 ### 13.2 Unforgeability (classical ROM, 128-bit target)
@@ -983,7 +1047,7 @@ transcript, and round-by-round bad events — the bound becomes, with `Q_leaf`
 queries to `leaf`, `Q_1` to `tree`/`hcom`/`hv` and `Q_{2,j}` to `ch_j`:
 
 ```
-Adv_EUF-KO ≤ Q_H^2 / 2^256                             (collisions of 256-bit outputs)
+Adv_EUF-KO ≤ Q_H^2 / 2^257 + Q_H · T / 2^256           (collisions of 256-bit outputs; hits on fixed values)
            + Q_{2,1} · C(τ,2) · ε_v                     (VOLE consistency, ≤ 2^−231.1 per query)
            + Q_{2,2} · ε_zk                             (ZKHash, ≈ 2^−128 per query)
            + Q_{2,3} · 2^{1−λ}                           (QuickSilver final check, 2^−127 per query)
@@ -1000,20 +1064,31 @@ outputs have at least 256 bits.
   our hash families.
 - **Revision 1** (2026-10-14 internal review; argued, not proven). The first
   term was `3·(Q_leaf + Q_1 + Q_2)^2/2^256`: the factor 3 had no derivation,
-  and `Q_2` included `ch3`, whose 128-bit output has no useful collision. Now:
-  at most `Q_H^2/2` pairs of outputs, each colliding with probability
-  `2^−256`, with a factor 2 to spare for a query that hits a value fixed
-  earlier in the transcript. The `chall3` term is new: the verifier compares
-  `SHAKE256[ch3](chall2 ‖ ã ‖ enc(b̃'))` with the `chall3` in the proof, not `b̃'`
-  with `b̃`, so a `ch3` query can also succeed when `b̃' ≠ b̃` and the 128-bit
-  outputs coincide. That is a fixed-point event, `2^−128` per query, not a
-  birthday bound, because `Δ`, and with it `b̃'`, is that same query's output.
-  It is dominated by the term above it.
+  and `Q_2` included `ch3`, whose 128-bit output has no useful collision. It
+  became `Q_H^2/2^256`: at most `Q_H^2/2` pairs of outputs, each colliding with
+  probability `2^−256`, with a factor 2 to spare for a query that hits a value
+  fixed earlier in the transcript. The `chall3` term was new: the verifier
+  compares `SHAKE256[ch3](chall2 ‖ ã ‖ enc(b̃'))` with the `chall3` in the
+  proof, not `b̃'` with `b̃`, so a `ch3` query can also succeed when `b̃' ≠ b̃`
+  and the 128-bit outputs coincide; revision 1 counted that as a fixed-point
+  event, `2^−128` per query, dominated by the term above it.
+- **Revision 3** (2026-10-24 review; argued, not proven). The pairs give
+  `Q_H^2/2^257`, and a query that hits one of the `T` 256-bit values a proof
+  fixes adds at most `Q_H·T/2^256`, with `T ≈ 1,050` (1,024 leaf commitments,
+  24 `h_i`, `hcom` and `h_V`). Revision 1's `Q_H^2/2^256` covers both once
+  `Q_H ≥ 2T`; below that the hit term is under `2^−234` anyway. Counted more
+  precisely, the `chall3` event needs no term per query: a `ch3` query whose
+  output closes the loop, with `Δ` taken from that same output, is the
+  final-check event of the term above it, and what is left is the verifier's
+  own fresh query matching `chall3`, `2^−λ` once per verification. The bound
+  keeps the larger, conservative `Q_{2,3}·2^−λ`.
 - The `C(τ,2)·ε_v` term is FAEST's Claim 1 (from BBD+23 Theorem 2, SoftSpokenVOLE
   with the repetition code over the τ trees). With `τ = 24`, `C(τ,2) = 276`
   (v0.1: 120), and `ε_v ≤ (330/2^128)^2` keeps the term at `2^−231.1` per query
   (v0.1: `2^−232.3`); FAEST v1.1 needed `B = 16` extra hash bits for the same factor.
-  The exact source and form of the `C(τ,2)` factor still need checking; at
+  The exact source and form of the `C(τ,2)` factor in FAEST still need
+  checking; the lemma sketch below derives it on its own terms, as a union
+  bound over the pairs of trees whose `e_i` could collide under `VH`. At
   `ε_v ≈ 2^−239` any factor polynomial in `τ` is irrelevant.
 - **What else depends on τ or the depths** (re-checked for v0.2):
   - The final-check term `2^{1−λ}`, the challenge space and brute force on `Δ`
@@ -1035,8 +1110,11 @@ outputs have at least 256 bits.
   programming `ch1`, `ch2`, `ch3`; the added terms are PRG/PRF advantages of the
   tagged SHAKE256 calls and programming collisions bounded by the min-entropy of
   `hcom` (256 bits) and `iv_pre` (128 bits). These terms are named here, not
-  derived; the one from `iv_pre`'s 128 bits must be checked against the number
-  of proofs per key, which is small in the rescue lane.
+  derived, except the one from `iv_pre`'s 128 bits: with `q_s` proofs made by
+  honest provers, every proof made counted (retries included), it is at most
+  about `q_s·Q·2^−128`, a factor `q_s/2` above the EUF-KO target of `Q·2^−127`
+  (the price of `λ = 128`). The rescue lane makes few proofs, about one per
+  rescued output; up to `q_s = 2^12` the term is at most `Q·2^−116`.
 
 **Lemma sketch: guessing part of `Δ`** (2026-10-14 internal review; argued,
 not proven). Fix everything the prover commits to before `chall1`, let `u_i` be
@@ -1075,13 +1153,26 @@ hash-mask rows, `ã` by `u*`, and `d` by `u[0..ℓ)`; `b̃` is determined by the
 rest. If this argument holds, an honestly generated proof reveals nothing
 about `x` beyond the statement.
 
-That is a property of the protocol, not of any code here. Both provers in
-this repository, the Python reference and the Rust crate, are test code: they
-are not constant time (they index 64 KiB GF(2^128) tables, and 16-entry
-windows of the carry-less multiply, with secret values such as VOLE tags and
-ZKHash accumulators), and they do not zeroize secrets. Demonstrations use
-test seeds only; a constant-time prover is a precondition for proving with
-any real seed (§14).
+That is a property of the protocol, not of any code here. The two provers in
+this repository differ (revision 3; revision 2 still called both test code):
+
+- **The Python reference prover is test code.** It is not constant time (it
+  indexes 64 KiB GF(2^128) tables, and 16-entry windows of the carry-less
+  multiply, with secret values such as VOLE tags and ZKHash accumulators), and
+  it does not zeroize secrets. Use it with test seeds only.
+- **The Rust prover is written to be constant time and to clear its
+  secrets**, as `rust/CT-AUDIT.md` claims and documents: constant-time
+  GF(2^128) products, no branch or table index on secret data, zeroization of
+  the secret buffers it allocates (the circuit's wire values included), and a
+  best-effort stack scrub after each call. The audit's evidence is a code
+  review and statistical timing tests on one machine; the gaps it states are
+  registers, the path of a panic, the Keccak permutation's own temporaries
+  and buffers that belong to the caller. No external review has checked it.
+
+So the Rust prover may be used with test seeds and with seeds used on this
+signet alone, never on another network or protocol (§12.1 item 4). A seed
+that protects anything of value elsewhere needs a prover whose constant-time
+claims have been reviewed (§14).
 
 ### 13.4 Strong unforgeability and non-malleability (argued, not proven)
 
@@ -1104,11 +1195,15 @@ preimage:
 `h_i` need a 256-bit collision of `tree`, `leaf` or `ggm`; so `π' = π`.
 Otherwise `π'` uses a fresh random-oracle input in some round, every later
 challenge is fresh, and the simulation and straight-line extraction of FAEST
-v1.1 Theorem 2 apply to `π'`: the trees of a simulated proof are generated
-honestly, but a fresh `Δ'` differs from `Δ`, and so hides a different leaf in
-some tree, except with probability `2^−128`, so `π'` cannot reuse `π`'s
-openings. Hence `Adv_SUF-CMA ≤ Adv_EUF-CMA` plus collision terms of 256-bit
-outputs. Making this a proof needs a Fiat–Shamir simulation-extractability
+v1.1 Theorem 2 apply to `π'`. A `π'` that reuses some of `π`'s trees is
+covered by the sub-cube lemma of §13.2: a reused tree pins its `k_i` bits of
+`Δ'` to the bits `δ_i` of `π`'s `Δ` (otherwise `π`'s opening bytes rebuild a
+different `h_i` under the new hidden leaf), and on that sub-cube the final
+check is still a polynomial of degree at most 2 fixed before `Δ'` is drawn,
+so it passes with probability at most `2^{1−λ}` per `ch3` query. (Revision 2
+argued from `Δ' ≠ Δ` alone, which misses a partial reuse: one tree's hidden
+leaf stays the same with probability `2^−k_i`, not `2^−128`.) Hence
+`Adv_SUF-CMA ≤ Adv_EUF-CMA` plus collision terms of 256-bit outputs. Making this a proof needs a Fiat–Shamir simulation-extractability
 result (NOTES.md, question 3); §12 does not rely on it as proven.
 
 Moving a proof to another message or statement changes μ, hence every
@@ -1136,9 +1231,11 @@ FAEST v3.0's classical proof takes the same key-switching route, which is why
 **The threat model is quantum, the claims are classical** (2026-10-14
 internal review). The rescue lane exists because of quantum attackers, but
 §13.2–§13.4 are classical-ROM arguments. Against a quantum attacker only the
-best known attacks can be stated: Grover search for `Δ` (one of the at most
-two roots of the degree-2 final check, about `2^63.5` evaluations of the whole
-chain up to `ch3`) or for any hidden seed (128 per proof, each with its own
+best known attacks can be stated: Grover search for a `ch3` output that
+decodes to a root of the degree-2 final check at its own input (at most two
+such `Δ` per input, so about `2^63.5` iterations, each one `ch3` evaluation and
+one evaluation of that polynomial, once `chall2` and `ã` are fixed) or for any
+hidden seed (128 per proof, each with its own
 tweak, about `2^64`), and `2^128` Grover iterations against the one-way
 function. The loss of a three-round Fiat–Shamir transform in the QROM is not
 known. The consensus design must record, as an explicit risk decision, that
@@ -1163,7 +1260,8 @@ trade-off belongs in the same record.
   proofs) is harmless for binding, because `chall1` hashes `iv_pre`, not `iv`,
   and it gives at most a two-target seed guess on those two proofs. Collisions
   of `chall3` are not useful; what counts is a `ch3` output that coincides
-  with the `chall3` in a proof while `b̃' ≠ b̃`, the `Q_{2,3}·2^−λ` term of §13.2.
+  with the `chall3` in a proof while `b̃' ≠ b̃`, the `Q_{2,3}·2^−λ` term of §13.2
+  (counted more precisely there).
 - Grinding challenges is the `Q_{2,3}·(2^{1−λ} + 2^−λ)` part of §13.2.
 
 ## 14. Known limitations
@@ -1171,11 +1269,14 @@ trade-off belongs in the same record.
 1. No formal security proof (§13.2); QROM security conjectured (§13.5); strong
    unforgeability and simulation extractability argued only (§13.4). The
    lemma sketches of revision 1 come from an internal review.
-2. Neither prover is constant time and neither zeroizes secrets: the Python
-   reference and the Rust crate both index lookup tables with secret values
-   and keep secrets in ordinary memory (§13.3). They are for the
-   specification, tests, tools and demonstrations with test seeds. Proving
-   with a real seed requires a constant-time prover.
+2. Only the Rust prover is written to be constant time and to zeroize its
+   secrets, and those claims (`rust/CT-AUDIT.md`) have had no external
+   review; the Python reference indexes lookup tables with secret values and
+   keeps secrets in ordinary memory (§13.3). The Python prover is for the
+   specification, tests and demonstrations with test seeds; the Rust prover
+   also for seeds used on this signet alone. Proving with a seed that is
+   worth something elsewhere requires a prover whose constant-time claims
+   have been reviewed.
 3. Verification cost is dominated by ~5.3 MB of SHAKE256 output (§3.3). The
    Rust verifier takes 33–38 ms single-threaded on a Zen 2 server (median;
    NOTES.md, "v0.2 tree split" and "2026-10-14 internal reviews"), against
@@ -1212,7 +1313,7 @@ From FAEST v1.1 [F11] (the skeleton) and FAEST v3.0 [F30] (the hardening):
 | D11 | Tree commitment hash includes `iv` and the tree index | `H_1(com_0..com_{N−1})` | uniform tweak convention; harmless |
 | D12 | `τ = 24` trees, `k0`/`k1` split as in FAEST (8 trees of depth 6, then 16 of depth 5) | FAEST-128f: `τ = 16`, `k = 8`; FAEST-128s: `τ = 11`, depths 12 and 11 | more, smaller trees than any FAEST set: fewer leaf expansions for a faster verifier, at the cost of proof size |
 
-From R1 (`R1-voleith-plan.md`):
+From R1, the plan for this proof system:
 
 | # | Change | Reason |
 |---|---|---|
@@ -1276,8 +1377,21 @@ either change would need a new version:
   and `compress`'s asserted state `F` (§7.4). The version byte, the tags,
   the parameters, the proof format and both vector files of revision 1 are
   unchanged; `vectors/gadgets-v0.2.json` is new.
-- v0.2 is a review draft. After review, a frozen version is published with new
-  vectors.
+- Revision 3 of v0.2 (2026-10-24) changes wording only, after the review of
+  the final version (NOTES.md, "2026-10-24 review of the final version"): the
+  status and sources at the top; §12 and §12.1 (item 4 split into the node's
+  part and the part of wallets and operators); §13.1 (targets that share a
+  seed, under a heuristic model of HMAC-SHA256); §13.2 (the collision term,
+  the `chall3` term, the `iv_pre` term, the
+  source of `C(τ,2)`); §13.3 and §14 item 2 (the Rust prover as it now is);
+  §13.4 (proofs that reuse some trees); §13.5 (the cost of a Grover iteration);
+  §15 and §17 (the internal sources described, not named by file); and this
+  section. The version byte, the tags, the parameters, the proof format and
+  every vector file are unchanged.
+- v0.2 is fixed: `0x02`, as revisions 2 and later specify it, is what the
+  Ark-0 signet rescue lane (M4-R1) verifies. Later revisions change wording
+  only. Any change to the protocol, including a future frozen version
+  published with new vectors, takes a new version byte and label.
 
 ## 17. References
 
@@ -1302,8 +1416,9 @@ either change would need a new version:
 - [NB] *Practical Null-Branch Witness Attacks on In-the-Head Signatures.*
   ePrint 2026/2235 (cited from R1 §1.4; not re-read).
 - [FIPS 180-4] SHA-256. [FIPS 202] SHAKE256. [RFC 2104] HMAC.
-- Internal: `R1-voleith-plan.md`, `R-rescue-proof-system.md`,
-  `m4-design-2026-10-14.md` §11, `m4-plan-2026-10-14.md` §9.
+- Internal, not published: the plan for this proof system (R1), the spike
+  on rescue proof systems before it (R), and the rescue-lane interface and
+  owner decisions of the M4 design.
 
 ## Appendix A. Vector files
 

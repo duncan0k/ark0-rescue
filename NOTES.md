@@ -1287,6 +1287,49 @@ and gofmt clean; Go 17 pass, 1 skip; crosscheck 800 and CLI agreement 62,
 native-static-libs unchanged. Fuzz 120 s: 6,828 + 6,967, 9,837, 13,905
 runs; no crash, artifact or slow input.
 
+## 2026-10-24 review of the final version
+
+The same two AI models, again not external cryptographers, reviewed the
+final version: SPEC.md revision 2 at commit `f5a2bc0` (`3c90cd4` in the
+published history), the Rust verifier, and the consensus rules of the M4-R1
+patches (`doc/p2mr-rescue.md`, `src/script/p2mr_rescue.*` and the rescue
+parts of `src/script/interpreter.cpp`). Each also checked what became of the
+findings of 2026-10-14. Their full texts (in Chinese) are kept outside this
+repository.
+
+| Reviewer | Verdict | In short |
+|---|---|---|
+| gpt-6-astra, effort xhigh | NOT-YET | One finding, High and conditional: the consensus rule does not make a rescue depend on the freeze, so a rescue made while elliptic curve checks still work hands `d` to anyone who wants to spend the output first; it asks for the freeze to be a consensus condition. One Low: the prover text of §13.3 and §14 was out of date. Every other item it checked held. It reran the 81 Python tests. |
+| Fable 5.1, effort max | SHIP | No forgery, no malleability, no way around the consensus rules; it re-derived the sub-cube lemma and checked every bound. Two Medium, both about the text: the prover description, and the wallet and operator requirements of §12.1 item 4, which the node's documentation did not carry and which its limit of three rescue inputs per standard transaction did not fit. Eight Low. SHIP is conditional: the two Medium items and F-G fixed in the same batch as the lane, and the lane used only on a signet whose coins have no value, with no external review stated. |
+
+As of that review, of the 19 findings of 2026-10-14, 14 were closed and 5 in
+part: §12.1 item 4 (Fable F1 and astra's High), the source of `C(τ,2)` and
+the EUF-CMA terms (F3), the risk record of the consensus design (F5) and the
+prover description (F7). Revision 3 closes F7 and the `iv_pre` term of F3.
+
+Fable 5.1 then checked revision 3 itself: SHIP, with three Medium items about
+the record (the Ark-0 condition and the residual case missing from §12.1, the
+M4-R1 documentation described as done, a claim of two measuring machines
+that the cited document does not carry) and wording fixes; all are in
+revision 3.
+
+### Findings and dispositions
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| astra: a rescue while the checks still work publishes `d`; the freeze should be a consensus condition | High (conditional) | Kept as designed. M4-R1 chose this rule on purpose: in M4-R1 the freeze is a restricting script flag, and a rescue conditioned on it would make that flag relax and the rescue's validity depend on chain state beyond the block's height, the leaf and the transaction; nor would it help after a reorganization that undoes the freeze. The mempool takes a rescue spend only when the checks are disabled for the next block; a rescue that a block producer includes directly before the freeze is in force is left to the operator, accepted for a signet whose blocks one party signs. On Ark-0 the lane is to open only after the freeze is in force. SPEC §12.1 item 4 records all of this. |
+| Fable F-B: the wallet and operator requirements of §12.1 item 4 were not in the node's documentation, and a key with more than three frozen outputs does not fit one standard transaction | Medium | SPEC §12.1 item 4 split into the node's part and the part of wallets and operators. The same requirements and the path for more than three inputs (a block producer includes the transaction directly) are to be added to the M4-R1 documentation with its next patch; patches 0001–0092 do not carry them yet. |
+| Fable F-A, astra: §13.3 and §14 still called the Rust prover not constant time | Medium, Low | SPEC §13.3 and §14 item 2 rewritten, with the seeds each prover may be used with. The M4-R1 documentation is to say the same where it says that proofs are made off the node. |
+| Fable F-G: the risk decision of §13.5 was not recorded in the consensus design | Low | To be added to the M4-R1 documentation with its next patch: NIST category 1 against known quantum attacks, QROM as a conjecture, the seed-entropy precondition of §13.1. Not in patches 0001–0092. |
+| Fable F-C: §13.2, the hits on fixed values in the collision term, the `chall3` term, the `iv_pre` term, the source of `C(τ,2)` | Low | SPEC §13.2. The `chall3` term is kept as the conservative one. The source of `C(τ,2)` in FAEST is still to be checked. |
+| Fable F-D: §13.4 missed proofs that reuse some trees | Low | SPEC §13.4, through the sub-cube lemma. |
+| Fable F-E: §13.5 overstated the cost of a Grover iteration | Low | SPEC §13.5; the conclusion, NIST category 1, is unchanged. |
+| Fable F-F: §13.1 did not say that targets may share a seed | Low | SPEC §13.1. |
+| Fable F-H: `network_id` is an untagged SHA-256 | Low (optional) | No change: the three parts of `m` have fixed lengths and positions. A change would have to come before activation. |
+| Fable F-I: the wallet's key index must fit the one-byte suffix | Low | Checked: the Ark-0 web wallet derives `d` with a one-byte counter, which is the suffix. |
+| Fable F-J: the circuit is built on the first verification | Low | No change for now: once per process, a delay rather than a cost anyone can repeat. |
+| Fable: §16 still called v0.2 a review draft | — | SPEC §16 and the status line: `0x02` is fixed. |
+
 ## Open questions for reviewers
 
 1. **The security argument.** Does FAEST v1.1 Theorems 1–2 (with BBD+23
