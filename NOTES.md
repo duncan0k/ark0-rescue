@@ -1097,11 +1097,11 @@ still there.
 
 | Item | Change | Commit |
 |---|---|---|
-| 1 Incomplete trace (Medium) | strace reports a log it cannot write only on stderr and may exit 0 (checked: `-o /dev/full` printed "No space left on device" and exited 0). The traced build's stderr is now captured and must be empty (cargo `--quiet` writes nothing there on success), with exit status 0. strace runs with `--quiet=attach,personality` (`-q`, not `-qq`), so exit lines are written. `exec_trace.py` requires the first line to be the root's exec of `--root` (the rustup proxy for cargo), the last line its `+++ exited with 0 +++`, and every `--expect` program (cargo, rustc, the linker) to have run. Tests: an empty log, the log cut after each of its lines, no root exit, a root exit not last or not 0, a wrong first line; on the real trace, empty, the first 60 lines, and all but the last line each fail. | `023cc6a` |
+| 1 Incomplete trace (Medium) | strace reports a log it cannot write only on stderr and may exit 0 (checked: `-o /dev/full` printed "No space left on device" and exited 0). The traced build's stderr is now captured and must be empty, with exit status 0. (Corrected in round 5: `--quiet` does not promise an empty standard error, since a compiler warning still appears there; round 5 lets warnings through and fails only on strace's own lines.) strace runs with `--quiet=attach,personality` (`-q`, not `-qq`), so exit lines are written. `exec_trace.py` requires the first line to be the root's exec of `--root` (the rustup proxy for cargo), the last line its `+++ exited with 0 +++`, and every `--expect` program (cargo, rustc, the linker) to have run. Tests: an empty log, the log cut after each of its lines, no root exit, a root exit not last or not 0, a wrong first line; on the real trace, empty, the first 60 lines, and all but the last line each fail. | `023cc6a` |
 | 2 Paths (Medium) | Program paths must be absolute with no empty, `.` or `..` component, and allowed as written and resolved (`os.path.realpath`). An `--allow` entry pins its resolved file (`PATH`, not a link, or `PATH->TARGET`). Prefixes must hold for the resolved path against the resolved directory. Build scripts match `<target dir>/cli/build/<one component>/build-script-build` component by component; the glob option is gone. Tests: the review's two examples and a third, bad components, the build-script layout, a string-only prefix, links that resolve out of place. | `023cc6a` |
 | 3 `check-verifier-only.sh` (Medium) | Every count goes through `count_re`, where grep's status 1 means no match and status 2 or more fails. `nm -a -C` must exit 0, and its symbol lines must equal the `.symtab` entries reported by `readelf -sW` (exact on every listing: 13,427–17,006 per archive, 1,597 and 1,710 per unit-test binary). A self-test (missing file, directory, empty file, empty binary, listing cut in half) must catch each case. Found while doing this: the "LTO" variant forced 16 codegen units, which left the archive unmerged, so it was not the one Bitcoin Core links. It now uses the release profile as it stands, and its archive is byte-for-byte that of a plain `cargo build --release --no-default-features --lib`. | `84fa713` |
 
-**Windows build.** Both traced builds were complete and allowed (130
+**Windows build.** Both traced builds ended normally and were allowed (130
 lines, 12 programs each), the two builds were identical, and the
 shadowing check matched. The hashes are unchanged:
 `voleith-prove.exe`
@@ -1119,6 +1119,46 @@ and gofmt clean; Go 17 pass, 1 skip; crosscheck 800 and CLI agreement 62,
 Fuzz 120 s: 5,632 + 6,174, 9,872, 13,641 runs; no crash or artifact.
 One input was flagged slow (83 ms against a 36 ms baseline); replayed
 20 times on an idle core, it printed no `SLOW` line.
+
+### Review round 5 (2026-10-24)
+
+A read-only review of the round-4 fixes. It found the path components,
+escapes, build-script layout, grep statuses and the LTO variant right,
+and no change to what the verifier or the tools do with secrets. Two of
+its findings were false failures of normal builds. Two others asked the
+checks to defend against someone changing the build machine during the
+build, which they are not for: this round fixes the real failures, pins
+what can be pinned cheaply, and states the threat model. Nothing under
+`rust/src/` changed; SPEC.md, the vector files and every proof are
+unchanged. Every command used the system-first PATH; the stand-ins in
+`/root/.cargo/bin` are still there.
+
+| Item | Change | Commit |
+|---|---|---|
+| 1 Hard-linked proxy (Medium) | rustup may install `cargo` as a hard link of `rustup`, and then `realpath(cargo)` is `cargo`, which the old check refused. The proxy is now checked with `os.path.samefile` against `$CARGO_HOME/bin/rustup` and pinned as it is. Tests cover both layouts, plus a copy of rustup, which is refused. | `38869ff` |
+| 2 Compiler warnings (Low) | "Standard error must be empty" refused a build that printed only a warning. Standard error now goes through a pipe that the script reads itself (command substitution, no file in the build directory) and is shown in full. The build fails on strace's non-zero status or on any line starting with `<strace path>: ` or `strace: `; warnings pass. Round 4's row is corrected above. | `38869ff` |
+| 3 Truncated nm listing (Medium) | A symbol line now needs a non-empty name. nm's standard error must be empty, and the listing must end with a newline. The self-test gives `check_listing`, the function the real check uses, copies of a real listing with each defect: cut after the type letter (with and without a newline), cut mid-line, cut in half, nm stderr, empty. With the old pattern, the first of these still counted 13,427 (readelf's count); now it counts 13,426 and fails. | `7898307` |
+| 4 Pin before building (Medium, partly) | `exec_trace.py pin` records, before build 1, each allowed tool and the toolchain directory: path, resolved path, device, inode, SHA-256 (10 entries). Both builds are checked against that record, and `verify` checks after build 2 that nothing in it changed. Tests: new content, a link pointed elsewhere, a file replaced by a copy (another inode). | `38869ff` |
+| 5 Threat model (Medium, the rest) | README (Windows) and the header of `build-windows.sh`: the checks catch an accidentally contaminated build environment (a stray tool on PATH, a cargo configuration, another toolchain or package version, a fault-injection build, a local path in a binary) on a build machine that nobody else writes to during the build. They do not defend against someone who can change that machine during the build: whoever can write to the toolchain, the build directory or the disk then can as well replace the compiler. The trace and the pins are evidence that a normal build went as described, not proof. "Complete" is narrowed to "ends normally" in `exec_trace.py` and in round 4 above. | `16300e1` |
+
+**Windows build.** The pins were unchanged at the end, both traced
+builds ended normally and were allowed (130 and 128 lines, 12 programs
+each), the two builds were identical, and the shadowing check matched.
+The hashes are unchanged:
+`voleith-prove.exe`
+`4828a2054e7f4f71fb262970c343b6ac2fe98b33adbea7fba2601242d5f8a546`,
+`voleith-verify.exe`
+`d67ceec30efb33f2fcbdedaef1a2f5d09c642a7753205815197ee9173a1663f8`.
+Under wine, the trial run printed vector 0's y, and the four verify
+commands said `valid`.
+
+Checks: Python 81; exec_trace 28 tests; cargo 42 + 2 ignored;
+verifier-only 33; cli 58; fault-injection 60; cli-profile fault tests 18;
+Windows under wine 16 per profile; clippy (5 configurations), fmt, go vet
+and gofmt clean; Go 17 pass, 1 skip; crosscheck 800 and CLI agreement 62,
+0 mismatches; `check-verifier-only.sh` OK, its self-test included;
+native-static-libs unchanged. Fuzz 120 s: 6,596 + 6,393, 10,692, 14,561
+runs; no crash, artifact or slow input.
 
 ## Open questions for reviewers
 
