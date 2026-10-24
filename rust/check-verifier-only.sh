@@ -81,11 +81,23 @@ symtab_entries() { # binary
 # ERRFILE, is complete: nm wrote nothing to standard error, the listing
 # ends with a newline, and its complete symbol lines are exactly the
 # .symtab entries readelf reports. Prints the count; status 2 otherwise.
+# Whether FILE ends with a newline: status 0 if so, 1 if not, 2 if it
+# cannot be read (tail fails), so that a failed read is never "a newline".
+# TAIL is the tail command; only the self-test sets it, to `false`.
+TAIL=tail
+ends_with_newline() { # file
+  local last
+  [ -f "$1" ] || return 2
+  last=$("$TAIL" -c 1 -- "$1" 2> /dev/null) || return 2
+  [ -z "$last" ] && [ -s "$1" ] && return 0
+  return 1
+}
+
 check_listing() { # binary listing errfile
   local lines entries
   [ -s "$2" ] || return 2
   [ ! -s "$3" ] || return 2
-  [ -z "$(tail -c 1 -- "$2")" ] || return 2
+  ends_with_newline "$2" || return 2
   lines=$(count_re "$2" "$SYMLINE") || return 2
   entries=$(symtab_entries "$1") || return 2
   [ "$lines" -eq "$entries" ] || return 2
@@ -100,57 +112,109 @@ list_symbols() { # binary listing
   check_listing "$1" "$2" "$2.err"
 }
 
+# The self-test is called as `self_test || fail=1`, where bash does not
+# apply `set -e`: every step below checks its own status, and every
+# defective sample is checked to have the defect it is meant to have, so
+# that a sample that failed to be made cannot pass as a caught defect.
+st_fail() {
+  echo "self-test: $*" >&2
+  return 1
+}
+
+# The last complete symbol line of LISTING cut right after its type letter
+# and the space after it (the name field removed), whatever the width of
+# the address column (8 or 16 characters, or blanks); on standard output.
+cut_after_type() { # listing
+  local last line
+  last=$(grep -nE -- "$SYMLINE" "$1" | tail -n 1) || return 1
+  last=${last%%:*}
+  [[ "$last" =~ ^[0-9]+$ ]] || return 1
+  head -n "$((last - 1))" -- "$1" || return 1
+  line=$(sed -n "${last}p" -- "$1") || return 1
+  [[ "$line" =~ ^(([0-9a-f]{8}|[0-9a-f]{16}| {8}| {16})\ [A-Za-z?-]\ ) ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+  sed -n "$((last + 1)),\$p" -- "$1" || return 1
+}
+
+# For BINARY: its listing passes check_listing, and each defect, put into
+# a copy and given to the same check_listing, fails. DIR holds the files.
+defect_samples() { # binary dir
+  local a=$1 d=$2 n total size
+  mkdir -p "$d" || st_fail "cannot make $d" || return 1
+  list_symbols "$a" "$d/full.txt" > /dev/null || st_fail "list_symbols failed on $a" || return 1
+  : > "$d/noerr.txt" || return 1
+  echo "nm: some warning" > "$d/err.txt" || return 1
+  total=$(wc -l < "$d/full.txt") || return 1
+  size=$(wc -c < "$d/full.txt") || return 1
+  # The last symbol line cut after its type letter, with a newline and
+  # without one; the cut line must then be exactly "<address> <type> ".
+  cut_after_type "$d/full.txt" > "$d/cut-type.txt" || st_fail "cannot cut $d/full.txt" || return 1
+  [ "$(wc -l < "$d/cut-type.txt")" -eq "$total" ] || st_fail "cut-type has another line count" || return 1
+  n=$(grep -cE -- '^([0-9a-f]{8}|[0-9a-f]{16}| {8}| {16}) [A-Za-z?-] $' "$d/cut-type.txt") &&
+    [ "$n" -eq 1 ] || st_fail "cut-type does not end a line after the type letter" || return 1
+  { head -n "$((total - 1))" -- "$d/cut-type.txt" && tail -n 1 -- "$d/cut-type.txt" | tr -d '\n'; } \
+    > "$d/cut-type-nonl.txt" || return 1
+  # Cut in the middle of the last line, and in half at a line boundary.
+  head -c "$((size - 5))" -- "$d/full.txt" > "$d/cut-mid.txt" || return 1
+  head -n "$((total / 2))" -- "$d/full.txt" > "$d/cut-half.txt" || return 1
+  local f
+  for f in cut-type-nonl.txt cut-mid.txt; do
+    n=0
+    ends_with_newline "$d/$f" || n=$?
+    [ "$n" -eq 1 ] || st_fail "$f should end without a newline" || return 1
+  done
+  n=0
+  ends_with_newline "$d/cut-half.txt" || n=$?
+  [ "$n" -eq 0 ] || st_fail "cut-half.txt should end with a newline" || return 1
+  local case
+  for case in "full.txt|err.txt" "cut-type.txt|noerr.txt" "cut-type-nonl.txt|noerr.txt" \
+    "cut-mid.txt|noerr.txt" "cut-half.txt|noerr.txt" "noerr.txt|noerr.txt"; do
+    if check_listing "$a" "$d/${case%%|*}" "$d/${case#*|}" > /dev/null; then
+      st_fail "check_listing accepted $case for $a" || return 1
+    fi
+  done
+  check_listing "$a" "$d/full.txt" "$d/noerr.txt" > /dev/null ||
+    st_fail "check_listing refused the intact listing of $a" || return 1
+}
+
 self_test() {
-  local d=$SYMS/self-test n a=$1
-  mkdir -p "$d/dir"
-  : > "$d/empty.txt"
+  local d=$SYMS/self-test n rc
+  mkdir -p "$d/dir" || return 1
+  : > "$d/empty.txt" || return 1
+  printf 'x\n' > "$d/nl.txt" || return 1
   for bad in "$d/missing.txt" "$d/dir"; do
     if count_re "$bad" x > /dev/null; then
-      echo "self-test: count_re read $bad" >&2
-      return 1
+      st_fail "count_re read $bad" || return 1
     fi
+    # A file that tail cannot read is not "a newline".
+    rc=0
+    ends_with_newline "$bad" || rc=$?
+    [ "$rc" -eq 2 ] || st_fail "ends_with_newline gave $rc for $bad" || return 1
   done
-  n=$(count_re "$d/empty.txt" x) && [ "$n" -eq 0 ] || {
-    echo "self-test: count_re on an empty file" >&2
-    return 1
-  }
-  # A listing of a real archive passes; each defect below, put into a copy
-  # of it and given to the same check_listing, must fail.
-  list_symbols "$a" "$d/full.txt" > /dev/null || {
-    echo "self-test: list_symbols failed on $a" >&2
-    return 1
-  }
-  : > "$d/noerr.txt"
-  echo "nm: some warning" > "$d/err.txt"
-  local total last
-  total=$(wc -l < "$d/full.txt")
-  last=$(grep -nE "$SYMLINE" "$d/full.txt" | tail -n 1 | cut -d: -f1)
-  # The last symbol line cut after its type letter, with and without a
-  # newline after it.
-  head -n "$((last - 1))" "$d/full.txt" > "$d/cut-type.txt"
-  sed -n "${last}p" "$d/full.txt" | cut -c1-19 >> "$d/cut-type.txt"
-  sed -n "$((last + 1)),\$p" "$d/full.txt" >> "$d/cut-type.txt"
-  head -n "$((last - 1))" "$d/full.txt" > "$d/cut-type-nonl.txt"
-  sed -n "${last}p" "$d/full.txt" | cut -c1-19 | tr -d '\n' >> "$d/cut-type-nonl.txt"
-  # Cut in the middle of the last line (no newline at the end).
-  head -c "$(($(wc -c < "$d/full.txt") - 5))" "$d/full.txt" > "$d/cut-mid.txt"
-  # Cut in half at a line boundary.
-  head -n "$((total / 2))" "$d/full.txt" > "$d/cut-half.txt"
-  local case
-  for case in "cut-type.txt|noerr.txt" "cut-type-nonl.txt|noerr.txt" "cut-mid.txt|noerr.txt" \
-    "cut-half.txt|noerr.txt" "full.txt|err.txt" "empty.txt|noerr.txt"; do
-    if check_listing "$a" "$d/${case%%|*}" "$d/${case#*|}" > /dev/null; then
-      echo "self-test: check_listing accepted $case" >&2
-      return 1
-    fi
-  done
+  ends_with_newline "$d/nl.txt" || st_fail "ends_with_newline on a newline" || return 1
+  # tail failing on a readable file (as root, no file is unreadable): the
+  # same function with `false` as tail must report a failed read.
+  rc=0
+  TAIL=false ends_with_newline "$d/nl.txt" || rc=$?
+  [ "$rc" -eq 2 ] || st_fail "ends_with_newline gave $rc when tail failed" || return 1
+  n=$(count_re "$d/empty.txt" x) && [ "$n" -eq 0 ] || st_fail "count_re on an empty file" || return 1
+  # Address columns of 16 characters (the real archive, a 64-bit object)
+  # and of 8 (a 32-bit object), all from the same assembler source.
+  printf '%s\n' .text .globl\ alpha 'alpha: nop' 'beta: nop' .globl\ gamma 'gamma: ret' \
+    .data 'delta: .long 1' .globl\ ext > "$d/t.s" || return 1
+  as --32 -o "$d/t32.o" "$d/t.s" || st_fail "cannot assemble a 32-bit object" || return 1
+  as --64 -o "$d/t64.o" "$d/t.s" || st_fail "cannot assemble a 64-bit object" || return 1
+  defect_samples "$1" "$d/archive" || return 1
+  defect_samples "$d/t64.o" "$d/obj64" || return 1
+  defect_samples "$d/t32.o" "$d/obj32" || return 1
+  n=$(grep -cE '^[0-9a-f]{8} [A-Za-z?-] ' "$d/obj32/full.txt") && [ "$n" -ge 1 ] ||
+    st_fail "the 32-bit listing has no 8-character addresses" || return 1
   for bad in "$d/missing.a" "$d/empty.txt"; do
     if list_symbols "$bad" "$d/x.txt" > /dev/null; then
-      echo "self-test: list_symbols accepted $bad" >&2
-      return 1
+      st_fail "list_symbols accepted $bad" || return 1
     fi
   done
-  echo "self-test: a missing file, a directory, a cut or erroring listing and an empty binary are all caught"
+  echo "self-test: an unreadable file, a cut or erroring listing (16- and 8-character addresses) and an empty binary are all caught"
 }
 
 lib() { # label lto opt-level codegen-units features...
@@ -176,13 +240,21 @@ lib() { # label lto opt-level codegen-units features...
 unit_tests() { # label features...
   local label=$1 exe n
   shift
-  exe=$(cargo test --quiet --release --lib --no-run "$@" --target-dir "$OUT/$label" \
+  # The JSON reader prints exactly one path, the last test executable,
+  # and fails (as does the pipeline, under pipefail) if there is none or
+  # if the path holds a newline; no `tail` cuts a path apart.
+  if ! exe=$(cargo test --quiet --release --lib --no-run "$@" --target-dir "$OUT/$label" \
     --message-format=json 2> /dev/null |
     python3 -I -c 'import json,sys
-for l in sys.stdin:
-    m = json.loads(l)
-    if m.get("reason") == "compiler-artifact" and m.get("executable") and m["profile"]["test"]:
-        print(m["executable"])' | tail -n 1)
+exes = [m["executable"] for m in map(json.loads, sys.stdin)
+        if m.get("reason") == "compiler-artifact" and m.get("executable") and m["profile"]["test"]]
+if not exes or "\n" in exes[-1]:
+    sys.exit(1)
+sys.stdout.write(exes[-1])'); then
+    echo "$label: building the unit tests or finding their binary failed" >&2
+    fail=1
+    return
+  fi
   if [ -z "$exe" ] || ! n=$(list_symbols "$exe" "$SYMS/$label.txt"); then
     echo "$label: no unit-test binary, or nm failed or its listing is incomplete" >&2
     fail=1
