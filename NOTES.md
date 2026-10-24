@@ -1138,7 +1138,7 @@ unchanged. Every command used the system-first PATH; the stand-ins in
 | 1 Hard-linked proxy (Medium) | rustup may install `cargo` as a hard link of `rustup`, and then `realpath(cargo)` is `cargo`, which the old check refused. The proxy is now checked with `os.path.samefile` against `$CARGO_HOME/bin/rustup` and pinned as it is. Tests cover both layouts, plus a copy of rustup, which is refused. | `38869ff` |
 | 2 Compiler warnings (Low) | "Standard error must be empty" refused a build that printed only a warning. Standard error now goes through a pipe that the script reads itself (command substitution, no file in the build directory) and is shown in full. The build fails on strace's non-zero status or on any line starting with `<strace path>: ` or `strace: `; warnings pass. Round 4's row is corrected above. | `38869ff` |
 | 3 Truncated nm listing (Medium) | A symbol line now needs a non-empty name. nm's standard error must be empty, and the listing must end with a newline. The self-test gives `check_listing`, the function the real check uses, copies of a real listing with each defect: cut after the type letter (with and without a newline), cut mid-line, cut in half, nm stderr, empty. With the old pattern, the first of these still counted 13,427 (readelf's count); now it counts 13,426 and fails. | `7898307` |
-| 4 Pin before building (Medium, partly) | `exec_trace.py pin` records, before build 1, each allowed tool and the toolchain directory: path, resolved path, device, inode, SHA-256 (10 entries). Both builds are checked against that record, and `verify` checks after build 2 that nothing in it changed. Tests: new content, a link pointed elsewhere, a file replaced by a copy (another inode). | `38869ff` |
+| 4 Pin before building (Medium, partly) | `exec_trace.py pin` records, before build 1, each allowed tool (9: path, the file it resolves to, that file's device, inode and SHA-256) and the toolchain directory (path, resolved path, device and inode; no hash). (Wording corrected in round 6: a directory record has no SHA-256.) Both builds are checked against that record, and `verify` checks after build 2 that nothing in it changed. Tests: new content, a link pointed elsewhere, a file replaced by a copy (another inode). | `38869ff` |
 | 5 Threat model (Medium, the rest) | README (Windows) and the header of `build-windows.sh`: the checks catch an accidentally contaminated build environment (a stray tool on PATH, a cargo configuration, another toolchain or package version, a fault-injection build, a local path in a binary) on a build machine that nobody else writes to during the build. They do not defend against someone who can change that machine during the build: whoever can write to the toolchain, the build directory or the disk then can as well replace the compiler. The trace and the pins are evidence that a normal build went as described, not proof. "Complete" is narrowed to "ends normally" in `exec_trace.py` and in round 4 above. | `16300e1` |
 
 **Windows build.** The pins were unchanged at the end, both traced
@@ -1158,6 +1158,93 @@ Windows under wine 16 per profile; clippy (5 configurations), fmt, go vet
 and gofmt clean; Go 17 pass, 1 skip; crosscheck 800 and CLI agreement 62,
 0 mismatches; `check-verifier-only.sh` OK, its self-test included;
 native-static-libs unchanged. Fuzz 120 s: 6,596 + 6,393, 10,692, 14,561
+runs; no crash, artifact or slow input.
+
+### Review round 6 (2026-10-24)
+
+A read-only review of the round-5 fixes, judged against the threat model
+of round 5. It found the proxy check, the warnings, the stderr pipe, the
+pins and the threat model right. Nothing under `rust/src/` changed;
+SPEC.md, the vector files and every proof are unchanged. Every command
+used the system-first PATH; the stand-ins in `/root/.cargo/bin` are still
+there.
+
+| Item | Change | Commit |
+|---|---|---|
+| 1 A failed `tail` (Medium) | `ends_with_newline` returns 0, 1, or 2 when `tail` fails or the file is not a regular file, and `check_listing` fails on 1 and 2. The self-test runs it with `false` in place of `tail` on a readable file (as root nothing is unreadable) and requires 2. A copy of the script that ignored tail's status failed the self-test. | `903efb4` |
+| 2 8-character addresses (Medium) | The "cut after the type letter" sample now removes the name field by pattern (an address of 8 or 16 characters, or blanks), not with `cut -c1-19`. The self-test runs on the real archive and on 64- and 32-bit objects assembled from one source (`as --64`, `as --32`). A copy with the old column cut failed the self-test. | `903efb4` |
+| 3 `=` in a path (Low) | No two paths are joined by a separator any more: `--proxy PATH OTHER` and `--allow-link PATH TARGET` take two arguments, a parser with a fixed number of values per option replaces the pairwise one, and pinned places are (path, resolved) pairs; this also removes the internal `->` separator. Test: a CARGO_HOME named `a=b->c d` is pinned, checked and verified through `main()`. | `abac70a` |
+| 4 What is pinned (Low) | `build-windows.sh`, README and round 5 above now say it: for a tool, the path, the file it resolves to, and that file's device, inode and SHA-256; for the toolchain directory, the path, resolved path, device and inode, with no hash. | `abac70a` |
+
+**Sweep** of `build-windows.sh`, `check-verifier-only.sh`,
+`check-windows-shadowing.sh` and `windows/exec_trace.py`. Checked: every
+command substitution and pipe for lost failures; fixed column widths,
+64-bit layouts, and paths with spaces, `=`, `->` or newlines; and
+whether each check can fail in its self-test or has a positive control.
+
+Changed:
+- `check-verifier-only.sh`:
+  - `self_test` runs as `self_test || fail=1`, where bash does not apply
+    `set -e`. Every step now checks its own status, and each defective
+    sample is checked to have its defect before `check_listing` must
+    refuse it, so a sample that failed to be made cannot pass as a
+    caught defect. The intact listing must pass.
+  - The unit-test binary lookup piped JSON through `tail -n 1`, which
+    would cut a path with a newline apart, and a failed `cargo test`
+    ended the script without a message. The JSON reader now prints
+    exactly one path or fails, and the failure is reported. (`903efb4`)
+- `build-windows.sh`:
+  - `rustc -vV`, the tool listing (`sha256sum`, `dpkg-query`) and
+    `dirname "$(dirname "$(rustup which rustc)")"` lost failures (no
+    message, an empty field, or "."). Each value is now captured on its
+    own and the script refuses on failure; the toolchain directory must
+    be the parent of `bin/rustc`.
+  - The rustflags are joined with `printf`, not `echo`, which would take
+    a leading `-n` or `-e` as an option. (`abac70a`)
+  - The local-path scan had no positive control. A 64 MiB file holding
+    the checkout path, plain and with its separators as underscores,
+    must now be found by the same patterns. (`7fd4030`)
+- `exec_trace.py`: in check mode, an unreadable log, bad UTF-8, a bad pin
+  file or a bad option end with a message instead of a traceback (exit 1
+  either way). (`abac70a`)
+
+Checked and left as they are:
+- `dpkg -S … | cut` and `dpkg-query … || true` fail closed: an empty
+  owner or version is refused.
+- `cmp -s` returns 2 on a read error, which counts as "differs".
+- `count_in` and `count_re` keep grep's status 2 apart from no match.
+- The shadowing script's `command -v` comparisons fail closed.
+- `--remap-path-prefix=FROM=TO`: rustc splits at the last `=`, and the
+  TO side (`/target`, `/src`, `/cargo`, `/rustup`) holds none.
+- `env -i NAME=value`: values may hold `=`.
+- A path with a newline or a quote is escaped in the strace log, and the
+  parser refuses escaped paths: such a checkout or CARGO_HOME fails the
+  build (fails closed); spaces, `=` and `->` work.
+- The TOOLS table splits on `|` with `read`, but it is a constant.
+- The rustflags separator `\x1f` would break a path holding that
+  character, which no real path does.
+- Positive controls or self-tests exist for the marker and local-path
+  scans, the nm listing, the trace parser (split lines, end of log,
+  paths), the pins, the stderr rule, and the fault-injection refusal.
+  The comparison of the two builds is a plain `cmp`.
+
+**Windows build.** The pins were unchanged at the end, both traced
+builds ended normally and were allowed (130 lines, 12 programs each),
+both scan controls were found, the two builds were identical, and the
+shadowing check matched. The hashes are unchanged:
+`voleith-prove.exe`
+`4828a2054e7f4f71fb262970c343b6ac2fe98b33adbea7fba2601242d5f8a546`,
+`voleith-verify.exe`
+`d67ceec30efb33f2fcbdedaef1a2f5d09c642a7753205815197ee9173a1663f8`.
+Under wine, the trial run printed vector 0's y, and the four verify
+commands said `valid`.
+
+Checks: Python 81; exec_trace 30 tests; cargo 42 + 2 ignored;
+verifier-only 33; cli 58; fault-injection 60; cli-profile fault tests 18;
+Windows under wine 16 per profile; clippy (5 configurations), fmt, go vet
+and gofmt clean; Go 17 pass, 1 skip; crosscheck 800 and CLI agreement 62,
+0 mismatches; `check-verifier-only.sh` OK, self-test included;
+native-static-libs unchanged. Fuzz 120 s: 6,638 + 6,596, 10,917, 12,756
 runs; no crash, artifact or slow input.
 
 ## Open questions for reviewers
