@@ -373,12 +373,14 @@ done
 # dlltool's symbol names.
 leak=()
 for p in "$ROOT" "$CARGO_HOME" "$RUSTUP_HOME" "$HOME/" /tmp/; do
-  leak+=(-e "$p" -e "$(printf '%s' "$p" | tr '/.-' '___')")
+  u=$(printf '%s' "$p" | tr '/.-' '___') || refuse "cannot form the underscore form of $p"
+  leak+=(-e "$p" -e "$u")
 done
 # Positive control: a file holding each form of one local path (as is, and
 # with separators turned into underscores) in 64 MiB is found by the same
 # patterns.
-for form in "$ROOT" "$(printf '%s' "$ROOT" | tr '/.-' '___')"; do
+root_u=$(printf '%s' "$ROOT" | tr '/.-' '___') || refuse "cannot form the underscore form of $ROOT"
+for form in "$ROOT" "$root_u"; do
   {
     head -c 33554432 /dev/zero
     printf '%s\n' "$form"

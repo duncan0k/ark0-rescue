@@ -72,7 +72,7 @@ symtab_entries() { # binary
   local listing n
   listing=$(readelf -sW -- "$1" 2> /dev/null) || return 2
   n=$(awk '/^Symbol table .\.symtab. contains [0-9]+ entr/ {s += $5 - 1; t++}
-    END {if (t) print s}' <<< "$listing")
+    END {if (t) print s}' <<< "$listing") || return 2
   [[ "$n" =~ ^[0-9]+$ ]] || return 2
   echo "$n"
 }
@@ -149,7 +149,8 @@ defect_samples() { # binary dir
   # The last symbol line cut after its type letter, with a newline and
   # without one; the cut line must then be exactly "<address> <type> ".
   cut_after_type "$d/full.txt" > "$d/cut-type.txt" || st_fail "cannot cut $d/full.txt" || return 1
-  [ "$(wc -l < "$d/cut-type.txt")" -eq "$total" ] || st_fail "cut-type has another line count" || return 1
+  n=$(wc -l < "$d/cut-type.txt") || return 1
+  [ "$n" -eq "$total" ] || st_fail "cut-type has another line count" || return 1
   n=$(grep -cE -- '^([0-9a-f]{8}|[0-9a-f]{16}| {8}| {16}) [A-Za-z?-] $' "$d/cut-type.txt") &&
     [ "$n" -eq 1 ] || st_fail "cut-type does not end a line after the type letter" || return 1
   { head -n "$((total - 1))" -- "$d/cut-type.txt" && tail -n 1 -- "$d/cut-type.txt" | tr -d '\n'; } \
@@ -178,7 +179,7 @@ defect_samples() { # binary dir
 }
 
 self_test() {
-  local d=$SYMS/self-test n rc
+  local d=$SYMS/self-test n rc total
   mkdir -p "$d/dir" || return 1
   : > "$d/empty.txt" || return 1
   printf 'x\n' > "$d/nl.txt" || return 1
@@ -198,17 +199,26 @@ self_test() {
   TAIL=false ends_with_newline "$d/nl.txt" || rc=$?
   [ "$rc" -eq 2 ] || st_fail "ends_with_newline gave $rc when tail failed" || return 1
   n=$(count_re "$d/empty.txt" x) && [ "$n" -eq 0 ] || st_fail "count_re on an empty file" || return 1
-  # Address columns of 16 characters (the real archive, a 64-bit object)
-  # and of 8 (a 32-bit object), all from the same assembler source.
-  printf '%s\n' .text .globl\ alpha 'alpha: nop' 'beta: nop' .globl\ gamma 'gamma: ret' \
-    .data 'delta: .long 1' .globl\ ext > "$d/t.s" || return 1
-  as --32 -o "$d/t32.o" "$d/t.s" || st_fail "cannot assemble a 32-bit object" || return 1
-  as --64 -o "$d/t64.o" "$d/t.s" || st_fail "cannot assemble a 64-bit object" || return 1
+  # The real archive's listing (16-character addresses) for every defect.
   defect_samples "$1" "$d/archive" || return 1
-  defect_samples "$d/t64.o" "$d/obj64" || return 1
-  defect_samples "$d/t32.o" "$d/obj32" || return 1
-  n=$(grep -cE '^[0-9a-f]{8} [A-Za-z?-] ' "$d/obj32/full.txt") && [ "$n" -ge 1 ] ||
-    st_fail "the 32-bit listing has no 8-character addresses" || return 1
+  # The cut after the type letter for both address widths, on committed
+  # nm listings with 8- and 16-character address columns: the cut line
+  # must end right after the type letter and no longer count as a symbol
+  # line. (No assembler is needed, so this runs on any host.)
+  local fx full cut
+  for fx in nm-addr8.txt nm-addr16.txt; do
+    fx=tests/fixtures/$fx
+    total=$(wc -l < "$fx") || st_fail "cannot read $fx" || return 1
+    full=$(count_re "$fx" "$SYMLINE") || st_fail "cannot scan $fx" || return 1
+    [ "$full" -eq "$total" ] || st_fail "$fx has lines that are not symbol lines" || return 1
+    cut_after_type "$fx" > "$d/cut-$(basename "$fx")" || st_fail "cannot cut $fx" || return 1
+    n=$(wc -l < "$d/cut-$(basename "$fx")") || return 1
+    [ "$n" -eq "$total" ] || st_fail "the cut of $fx has another line count" || return 1
+    n=$(grep -cE -- '^([0-9a-f]{8}|[0-9a-f]{16}| {8}| {16}) [A-Za-z?-] $' "$d/cut-$(basename "$fx")") &&
+      [ "$n" -eq 1 ] || st_fail "the cut of $fx does not end a line after the type letter" || return 1
+    cut=$(count_re "$d/cut-$(basename "$fx")" "$SYMLINE") || return 1
+    [ "$cut" -eq "$((full - 1))" ] || st_fail "the cut line of $fx is still counted" || return 1
+  done
   for bad in "$d/missing.a" "$d/empty.txt"; do
     if list_symbols "$bad" "$d/x.txt" > /dev/null; then
       st_fail "list_symbols accepted $bad" || return 1
