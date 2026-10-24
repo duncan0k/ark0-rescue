@@ -1185,10 +1185,13 @@ whether each check can fail in its self-test or has a positive control.
 Changed:
 - `check-verifier-only.sh`:
   - `self_test` runs as `self_test || fail=1`, where bash does not apply
-    `set -e`. Every step now checks its own status, and each defective
-    sample is checked to have its defect before `check_listing` must
-    refuse it, so a sample that failed to be made cannot pass as a
-    caught defect. The intact listing must pass.
+    `set -e`. Each step that makes a sample or a listing checks its
+    status (`|| return 1`), and each defective sample is checked to have
+    its defect before `check_listing` must refuse it, so a sample that
+    failed to be made cannot pass as a caught defect; the intact listing
+    must pass. (Corrected in round 7: not every step was checked; a
+    `wc -l` inside a test and the awk count in `symtab_entries` were not,
+    and round 7 fixed both.)
   - The unit-test binary lookup piped JSON through `tail -n 1`, which
     would cut a path with a newline apart, and a failed `cargo test`
     ended the script without a message. The JSON reader now prints
@@ -1204,9 +1207,11 @@ Changed:
   - The local-path scan had no positive control. A 64 MiB file holding
     the checkout path, plain and with its separators as underscores,
     must now be found by the same patterns. (`7fd4030`)
-- `exec_trace.py`: in check mode, an unreadable log, bad UTF-8, a bad pin
-  file or a bad option end with a message instead of a traceback (exit 1
-  either way). (`abac70a`)
+- `exec_trace.py`: in check mode, an unreadable log, bad UTF-8, a pin file
+  that is not JSON, or a bad option end with a message instead of a
+  traceback (exit 1 either way). (`abac70a`; corrected in round 7: a pin
+  file that is valid JSON but of the wrong structure still raised a
+  TypeError with a traceback until round 7.)
 
 Checked and left as they are:
 - `dpkg -S … | cut` and `dpkg-query … || true` fail closed: an empty
@@ -1245,6 +1250,41 @@ Windows under wine 16 per profile; clippy (5 configurations), fmt, go vet
 and gofmt clean; Go 17 pass, 1 skip; crosscheck 800 and CLI agreement 62,
 0 mismatches; `check-verifier-only.sh` OK, self-test included;
 native-static-libs unchanged. Fuzz 120 s: 6,638 + 6,596, 10,917, 12,756
+runs; no crash, artifact or slow input.
+
+### Review round 7 (2026-10-24)
+
+A read-only review of the round-6 fixes and sweep. It found the four
+round-6 items fixed, and the path handling, the escaped newlines and the
+pins right. Each fix here is minimal: no new tool, dependency or code
+path beyond what the item needs. Nothing under `rust/src/` changed;
+SPEC.md, the vector files and every proof are unchanged. Every command
+used the system-first PATH; the stand-ins in `/root/.cargo/bin` are still
+there.
+
+| Item | Change | Commit |
+|---|---|---|
+| 1 Self-test needs an x86 assembler (Medium) | The `as --32` and `as --64` calls are gone; an AArch64 host, or a toolchain without both x86 ELF targets, can run the self-test now. Two committed listings, `rust/tests/fixtures/nm-addr8.txt` and `nm-addr16.txt` (five lines each), test the cut after the type letter for both address widths: the cut line ends right after the type letter and no longer counts. The real archive's listing still covers every `check_listing` defect. A copy with the old fixed-column cut fails on the 8-character fixture. | `c0cda88` |
+| 2 Lost statuses (Low) | Captured on its own and checked: the awk count in `symtab_entries`, a `wc -l` inside a test in `defect_samples`, and the `tr` that forms a path's underscore form in `build-windows.sh` (pattern list and control). The other substitutions used inline in the three scripts compare against an exact expected value and fail closed, so they stay. | `c0cda88` |
+| 3 Malformed pin file (Low) | `load_pins` checks the structure wherever a pin file is read (`verify`, `--pins`): exactly `tools` and `dirs`, lists of objects with the expected fields, string paths, integer (not boolean) device and inode, and a 64-hex SHA-256. Anything else is reported as "malformed pin file: …" with exit 1. Tests: `[]`, `null`, a string inode, a missing key and a boolean inode, each through `verify` and through `--pins`. Round 6's text above is corrected where it claimed every step checked its status and no traceback remained. | `1c7c354` |
+
+**Windows build.** The pins were unchanged at the end, both traced
+builds ended normally and were allowed (130 lines, 12 programs each),
+both scan controls were found, the two builds were identical, and the
+shadowing check matched. The hashes are unchanged:
+`voleith-prove.exe`
+`4828a2054e7f4f71fb262970c343b6ac2fe98b33adbea7fba2601242d5f8a546`,
+`voleith-verify.exe`
+`d67ceec30efb33f2fcbdedaef1a2f5d09c642a7753205815197ee9173a1663f8`.
+Under wine, the trial run printed vector 0's y, and the four verify
+commands said `valid`.
+
+Checks: Python 81; exec_trace 31 tests; cargo 42 + 2 ignored;
+verifier-only 33; cli 58; fault-injection 60; cli-profile fault tests 18;
+Windows under wine 16 per profile; clippy (5 configurations), fmt, go vet
+and gofmt clean; Go 17 pass, 1 skip; crosscheck 800 and CLI agreement 62,
+0 mismatches; `check-verifier-only.sh` OK, self-test included;
+native-static-libs unchanged. Fuzz 120 s: 6,828 + 6,967, 9,837, 13,905
 runs; no crash, artifact or slow input.
 
 ## Open questions for reviewers
