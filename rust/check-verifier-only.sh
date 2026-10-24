@@ -11,13 +11,16 @@
 # opt-level 0 without LTO, and its unit-test binary too.
 #
 # A failed or incomplete scan never counts as "no match":
-# - nm must exit 0, and its listing must be complete: the number of symbol
-#   lines of `nm -a -C` equals the number of .symtab entries that
-#   `readelf -sW` reports (the sum over all members of an archive, less
-#   each table's null entry), which a truncated listing cannot match;
+# - nm must exit 0 with nothing on standard error, its listing must end
+#   with a newline, and the number of complete symbol lines of `nm -a -C`
+#   (address or blanks, type letter, a non-empty name) must equal the
+#   number of .symtab entries that `readelf -sW` reports (the sum over all
+#   members of an archive, less each table's null entry);
 # - grep's status 1 is "no match", status 2 or more fails the check.
-# Before the builds, a self-test runs these functions on a missing file, a
-# directory, an empty file and a truncated listing, and each must fail.
+# A self-test runs these functions on a missing file, a directory, an
+# empty file, and copies of a real listing cut after a type letter (with
+# and without a newline), cut mid-line, cut in half, or with a message on
+# nm's standard error, and each must fail.
 # Usage: bash rust/check-verifier-only.sh   (from anywhere; needs nm, readelf)
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -47,8 +50,9 @@ fail=0
 SYMS=$OUT/symbols
 mkdir -p "$SYMS"
 
-# A symbol line of `nm -a`: an address or blanks, a type letter, a name.
-SYMLINE='^([0-9a-f]{8,16}| {8,16}) [A-Za-z?-] '
+# A complete symbol line of `nm -a`: an address or blanks, a type letter
+# and a non-empty name (a line cut after the type letter is not one).
+SYMLINE='^([0-9a-f]{8,16}| {8,16}) [A-Za-z?-] [^ ]'
 
 # The number of lines of FILE matching the extended regex RE; status 2,
 # with nothing printed, if grep could not read FILE (status 2 or more), so
@@ -73,20 +77,31 @@ symtab_entries() { # binary
   echo "$n"
 }
 
-# Lists the symbols of BINARY into LISTING with `nm -a -C`; status 2 if nm
-# fails or the listing does not hold every .symtab entry.
-list_symbols() { # binary listing
+# Whether LISTING, nm's output for BINARY with nm's standard error in
+# ERRFILE, is complete: nm wrote nothing to standard error, the listing
+# ends with a newline, and its complete symbol lines are exactly the
+# .symtab entries readelf reports. Prints the count; status 2 otherwise.
+check_listing() { # binary listing errfile
   local lines entries
-  [ -f "$1" ] || return 2
-  nm -a -C -- "$1" > "$2" 2> "$2.err" || return 2
+  [ -s "$2" ] || return 2
+  [ ! -s "$3" ] || return 2
+  [ -z "$(tail -c 1 -- "$2")" ] || return 2
   lines=$(count_re "$2" "$SYMLINE") || return 2
   entries=$(symtab_entries "$1") || return 2
   [ "$lines" -eq "$entries" ] || return 2
   echo "$lines"
 }
 
+# Lists the symbols of BINARY into LISTING with `nm -a -C`; status 2 if nm
+# fails or the listing is not complete (check_listing).
+list_symbols() { # binary listing
+  [ -f "$1" ] || return 2
+  nm -a -C -- "$1" > "$2" 2> "$2.err" || return 2
+  check_listing "$1" "$2" "$2.err"
+}
+
 self_test() {
-  local d=$SYMS/self-test n
+  local d=$SYMS/self-test n a=$1
   mkdir -p "$d/dir"
   : > "$d/empty.txt"
   for bad in "$d/missing.txt" "$d/dir"; do
@@ -99,30 +114,43 @@ self_test() {
     echo "self-test: count_re on an empty file" >&2
     return 1
   }
-  # A listing of a real archive passes, the same listing cut short does
-  # not, and neither does a missing or empty binary.
-  local a=$1
+  # A listing of a real archive passes; each defect below, put into a copy
+  # of it and given to the same check_listing, must fail.
   list_symbols "$a" "$d/full.txt" > /dev/null || {
     echo "self-test: list_symbols failed on $a" >&2
     return 1
   }
-  head -n "$(($(wc -l < "$d/full.txt") / 2))" "$d/full.txt" > "$d/cut.txt"
-  local lines entries
-  lines=$(count_re "$d/cut.txt" "$SYMLINE") && entries=$(symtab_entries "$a") || {
-    echo "self-test: cannot count the cut listing" >&2
-    return 1
-  }
-  if [ "$lines" -eq "$entries" ]; then
-    echo "self-test: a listing cut in half looks complete" >&2
-    return 1
-  fi
+  : > "$d/noerr.txt"
+  echo "nm: some warning" > "$d/err.txt"
+  local total last
+  total=$(wc -l < "$d/full.txt")
+  last=$(grep -nE "$SYMLINE" "$d/full.txt" | tail -n 1 | cut -d: -f1)
+  # The last symbol line cut after its type letter, with and without a
+  # newline after it.
+  head -n "$((last - 1))" "$d/full.txt" > "$d/cut-type.txt"
+  sed -n "${last}p" "$d/full.txt" | cut -c1-19 >> "$d/cut-type.txt"
+  sed -n "$((last + 1)),\$p" "$d/full.txt" >> "$d/cut-type.txt"
+  head -n "$((last - 1))" "$d/full.txt" > "$d/cut-type-nonl.txt"
+  sed -n "${last}p" "$d/full.txt" | cut -c1-19 | tr -d '\n' >> "$d/cut-type-nonl.txt"
+  # Cut in the middle of the last line (no newline at the end).
+  head -c "$(($(wc -c < "$d/full.txt") - 5))" "$d/full.txt" > "$d/cut-mid.txt"
+  # Cut in half at a line boundary.
+  head -n "$((total / 2))" "$d/full.txt" > "$d/cut-half.txt"
+  local case
+  for case in "cut-type.txt|noerr.txt" "cut-type-nonl.txt|noerr.txt" "cut-mid.txt|noerr.txt" \
+    "cut-half.txt|noerr.txt" "full.txt|err.txt" "empty.txt|noerr.txt"; do
+    if check_listing "$a" "$d/${case%%|*}" "$d/${case#*|}" > /dev/null; then
+      echo "self-test: check_listing accepted $case" >&2
+      return 1
+    fi
+  done
   for bad in "$d/missing.a" "$d/empty.txt"; do
     if list_symbols "$bad" "$d/x.txt" > /dev/null; then
       echo "self-test: list_symbols accepted $bad" >&2
       return 1
     fi
   done
-  echo "self-test: a missing file, a directory, an empty binary and a cut listing are all caught"
+  echo "self-test: a missing file, a directory, a cut or erroring listing and an empty binary are all caught"
 }
 
 lib() { # label lto opt-level codegen-units features...
