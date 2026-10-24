@@ -306,6 +306,39 @@ def unchanged(rec):
     return errors
 
 
+def load_pins(f):
+    """The pin record in file F, checked to have the structure pin()
+    writes; raises ValueError otherwise, so that a malformed pin file is
+    reported like any other bad input, not with a traceback."""
+    import json
+    rec = json.load(f)
+
+    def bad(why):
+        raise ValueError("malformed pin file: %s" % why)
+
+    def is_int(v):
+        return isinstance(v, int) and not isinstance(v, bool)
+
+    if not isinstance(rec, dict) or set(rec) != {"tools", "dirs"}:
+        bad("not an object with exactly 'tools' and 'dirs'")
+    for kind, keys, optional in (("tools", {"path", "resolved", "dev", "ino", "sha256"}, {"same_as"}),
+                                 ("dirs", {"path", "resolved", "dev", "ino"}, set())):
+        if not isinstance(rec[kind], list):
+            bad("'%s' is not a list" % kind)
+        for i, e in enumerate(rec[kind]):
+            if not isinstance(e, dict) or not keys <= set(e) <= keys | optional:
+                bad("%s[%d] does not have the fields %s" % (kind, i, sorted(keys)))
+            for k in ("path", "resolved") + (("same_as",) if "same_as" in e else ()):
+                if not isinstance(e[k], str):
+                    bad("%s[%d].%s is not a string" % (kind, i, k))
+            if not (is_int(e["dev"]) and is_int(e["ino"])):
+                bad("%s[%d].dev or .ino is not an integer" % (kind, i))
+            if "sha256" in e and not (isinstance(e["sha256"], str)
+                                      and re.fullmatch(r"[0-9a-f]{64}", e["sha256"])):
+                bad("%s[%d].sha256 is not 64 hex digits" % (kind, i))
+    return rec
+
+
 def pinned_places(rec):
     """(--allow entries, --allow-prefix entries) from a pin record."""
     return ([(e["path"], e["resolved"]) for e in rec["tools"]],
@@ -370,7 +403,7 @@ def main_verify(argv):
     """verify PINS.json"""
     import json
     with open(argv[0], encoding="utf-8") as f:
-        rec = json.load(f)
+        rec = load_pins(f)
     errors = unchanged(rec)
     for e in errors:
         sys.stderr.write("exec_trace.py: %s\n" % e)
@@ -423,7 +456,7 @@ def main_check(log, rest):
             build_dirs.append(vals[0])
         else:  # --pins
             with open(vals[0], encoding="utf-8") as f:
-                a, p = pinned_places(json.load(f))
+                a, p = pinned_places(load_pins(f))
             allow.extend(a)
             prefixes.extend(p)
     if root is None:

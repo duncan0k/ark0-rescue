@@ -303,6 +303,34 @@ class Pins(unittest.TestCase):
         self.assertEqual(et.main(["verify", pins]), 0)
         self.assertEqual(et.main([log, "--root", cargo, "--allow-link", cargo, rustup]), 0)
 
+    def test_malformed_pin_files(self):
+        good = et.pin([self.tool], [], [self.d])
+        bad_entry = dict(good, tools=[dict(good["tools"][0], ino="12")])
+        log = os.path.join(self.d, "log")
+        with open(log, "w") as f:
+            f.write('1  execve("%s", ["t"], 0x1 /* 1 var */) = 0\n1  +++ exited with 0 +++\n' % self.tool)
+        import contextlib
+        import io
+        import json
+        for name, content in (("list", []), ("null", None), ("wrong entry", bad_entry),
+                              ("missing key", {"tools": []}), ("bool inode",
+                               dict(good, dirs=[dict(good["dirs"][0], ino=True)]))):
+            pins = os.path.join(self.d, "pins.json")
+            with open(pins, "w") as f:
+                json.dump(content, f)
+            for argv in (["verify", pins], [log, "--root", self.tool, "--pins", pins]):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    rc = et.main(argv)
+                self.assertEqual(rc, 1, (name, argv[0]))
+                self.assertIn("malformed pin file", err.getvalue(), name)
+                self.assertNotIn("Traceback", err.getvalue(), name)
+        # The good record still loads.
+        with open(pins, "w") as f:
+            json.dump(good, f)
+        with open(pins) as f:
+            self.assertEqual(et.load_pins(f), good)
+
     def test_options(self):
         self.assertEqual(et.options(["--proxy", "a=b", "c", "--tool", "x"], {"--proxy": 2, "--tool": 1}),
                          [("--proxy", ["a=b", "c"]), ("--tool", ["x"])])
