@@ -375,6 +375,19 @@ leak=()
 for p in "$ROOT" "$CARGO_HOME" "$RUSTUP_HOME" "$HOME/" /tmp/; do
   leak+=(-e "$p" -e "$(printf '%s' "$p" | tr '/.-' '___')")
 done
+# Positive control: a file holding each form of one local path (as is, and
+# with separators turned into underscores) in 64 MiB is found by the same
+# patterns.
+for form in "$ROOT" "$(printf '%s' "$ROOT" | tr '/.-' '___')"; do
+  {
+    head -c 33554432 /dev/zero
+    printf '%s\n' "$form"
+    head -c 33554432 /dev/zero
+  } > "$control"
+  n=$(count_in "$control" "${leak[@]}") || refuse "the scan of the local-path control failed"
+  [ "$n" -ge 1 ] || refuse "the local-path scan misses $form"
+done
+echo "local-path scan: controls with the checkout path, plain and as underscores, found"
 for b in "${BINS[@]}"; do
   scan "a local path in $b.exe" "$OUT/$b.exe" "${leak[@]}"
 done
