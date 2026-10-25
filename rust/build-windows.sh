@@ -52,13 +52,17 @@
 #
 # Usage: bash rust/build-windows.sh [--unpublished] [out dir]
 #   (default out dir rust/target/windows-out)
-# Builds twice, each time from an empty target directory, checks that the
-# two builds are byte-identical, copies the .exe files to the out dir and
+# Builds twice, each time from an empty target directory in a new directory
+# under /tmp (the comment above MINGW_LIB says why), checks that the two
+# builds are byte-identical, copies the .exe files to the out dir and
 # prints their SHA-256. Every local path that could enter the binaries
 # (this checkout, the target directory, CARGO_HOME, RUSTUP_HOME) is
 # remapped, the linker writes no timestamp into the PE header, and the
 # symbol table is stripped.
 set -euo pipefail
+# With CDPATH set, cd to a relative path prints where it went, and every
+# $(cd ... && pwd -P) below would capture that line too.
+unset CDPATH
 HERE=$(cd "$(dirname "$0")" && pwd -P)
 OUT=
 UNPUBLISHED=0
@@ -83,8 +87,6 @@ OUT=${OUT:-$HERE/target/windows-out}
 # to belong to the package strace.
 STRACE=${WINDOWS_BUILD_STRACE:-/usr/bin/strace}
 PYTHON=/usr/bin/python3
-# Where the two build directories go (check-windows-shadowing.sh moves them).
-BASE=${WINDOWS_BUILD_BASE:-$HERE/target}
 TARGET=x86_64-pc-windows-gnu
 TOOLCHAIN=1.97.0
 RUSTC_COMMIT=2d8144b7880597b6e6d3dfd63a9a9efae3f533d3
@@ -172,6 +174,34 @@ done
   refuse "$LINKER does not use the listed ld"
 [ "$(env -i "$HOST_CC" -print-prog-name=collect2)" = /usr/libexec/gcc/x86_64-linux-gnu/13/collect2 ] ||
   refuse "$HOST_CC does not use the listed collect2"
+
+# Where the two build directories and the pin record go: a new directory
+# under /tmp, or WINDOWS_BUILD_BASE (check-windows-shadowing.sh sets it).
+# Its path matters. GNU ld orders the import sections of a PE file by the
+# path of the archive each comes from, and rustc writes its own import
+# libraries (the raw-dylib links of the standard library and of
+# getrandom) into the build directory. Under a path that sorts after that
+# of the mingw-w64 import libraries, the DLLs come in another order in the
+# import table, and the binaries differ from those of NOTES.md, which were
+# built under paths that sort before it.
+MINGW_LIB=/usr/lib/gcc/x86_64-w64-mingw32/13-win32/../../../../x86_64-w64-mingw32/lib/libkernel32.a
+[ "$(env -i "$LINKER" -print-file-name=libkernel32.a)" = "$MINGW_LIB" ] ||
+  refuse "$LINKER does not take libkernel32.a from $MINGW_LIB"
+if [ -n "${WINDOWS_BUILD_BASE:-}" ]; then
+  mkdir -p -- "$WINDOWS_BUILD_BASE" || refuse "cannot make $WINDOWS_BUILD_BASE"
+  BASE=$(cd -- "$WINDOWS_BUILD_BASE" && pwd -P) || refuse "cannot resolve $WINDOWS_BUILD_BASE"
+else
+  made=$(mktemp -d /tmp/voleith-windows.XXXXXX) || refuse "cannot make a directory under /tmp"
+  BASE=$(cd -- "$made" && pwd -P) || refuse "cannot resolve $made"
+fi
+# Byte order, as ld compares file names; a prefix of the library's path
+# would not decide the order of the paths below it.
+"$PYTHON" -I -c '
+import os, sys
+base, lib = (os.fsencode(p) for p in sys.argv[1:])
+sys.exit(0 if base < lib and not lib.startswith(base) else 1)
+' "$BASE/" "$MINGW_LIB" || refuse "the build directory $BASE does not sort before $MINGW_LIB"
+echo "build directories in $BASE"
 
 # The fixed environment of every cargo and rustc run. PATH has system
 # directories only; cargo and rustup are called by absolute path.

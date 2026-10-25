@@ -141,9 +141,9 @@ Not cleared:
 ## Windows
 
 `build-windows.sh` cross-compiles both tools for `x86_64-pc-windows-gnu`
-on Linux and builds them twice from empty target directories
-(`target/windows-build-1` and `-2`; it refuses to run if they exist); it
-fails unless the two builds are byte-identical and free of local paths:
+on Linux and builds them twice from empty target directories, in a new
+directory under `/tmp` whose name it prints; it fails unless the two
+builds are byte-identical and free of local paths:
 
 ```
 bash build-windows.sh            # out: target/windows-out/*.exe and their SHA-256
@@ -197,7 +197,16 @@ cargo runs under `env -i` with `LC_ALL=C`, `TZ=UTC`, `SOURCE_DATE_EPOCH=0`
 and nothing else that cargo or rustc reads, apart from the network
 settings for crate downloads, so the caller's `RUSTFLAGS`, `CARGO_*` and
 `RUSTUP_TOOLCHAIN` do not matter. The path of the checkout does not
-matter either. The binaries are not committed.
+matter either, but that of the build directories does, which is why they
+go under `/tmp`. GNU ld orders the import sections of a PE file by the
+path of the archive each comes from, and rustc writes its own import
+libraries (for the standard library and getrandom) into the build
+directory. Built under a path that sorts after that of the mingw-w64
+import libraries
+(`/usr/lib/gcc/x86_64-w64-mingw32/13-win32/../../../../x86_64-w64-mingw32/lib`),
+the same program has its DLLs in another order in the import table, and
+other SHA-256 values; the script refuses to build there. The binaries are
+not committed.
 
 On the Windows machine, in `cmd.exe`, pipe the seed from the restore step
 straight into the tool, so that it is never written to a file, a command

@@ -1330,6 +1330,53 @@ revision 3.
 | Fable F-J: the circuit is built on the first verification | Low | No change for now: once per process, a delay rather than a cost anyone can repeat. |
 | Fable: §16 still called v0.2 a review draft | — | SPEC §16 and the status line: `0x02` is fixed. |
 
+## 2026-10-25 Windows build directory
+
+A rebuild of the Windows tools of `f5a2bc0` (`rust/` is unchanged since)
+on another machine passed every check of `build-windows.sh`, and its two
+builds were identical, but both tools came out with other hashes than
+those recorded above: `voleith-prove.exe`
+`1efe185536d02a545c7f2433668e37ad1fd0413bd59ab1acd02b9469c4e1c0bc`,
+`voleith-verify.exe`
+`c2960d96a7d7068ba65eed79e06b26af7fe7352adffa6e981401ee8d445d1b88`. The
+machine was a pod from `ubuntu:24.04` with the recorded packages, rustup
+1.29.2 and the toolchain 1.97.0, the checkout in `/work/src`. In the same
+pod, `check-windows-shadowing.sh`, whose build directories are under
+`/tmp`, gave the recorded hashes. Then only the build directory
+(`WINDOWS_BUILD_BASE`) was moved:
+
+| build directory | `voleith-prove.exe`, `voleith-verify.exe` |
+|---|---|
+| `/work/src/rust/target` (the default), `/work/tb`, `/var/tb`, `/work/voleith-shadow.abcdef`, `/usr/zzz/tb` | `1efe1855…`, `c2960d96…` |
+| `/tmp/tb`, `/tmp/voleith-shadow.*`, `/usr/aaa/tb` | `4828a205…`, `d67ceec3…`, as recorded |
+
+The two `voleith-verify.exe` have the same section sizes and the same
+strings. They differ in the order of the DLLs in the import table, and in
+the addresses that follow from it: KERNEL32, msvcrt, ntdll,
+api-ms-win-core-synch-l1-2-0, bcryptprimitives in the first, and
+api-ms-win-core-synch-l1-2-0, bcryptprimitives, KERNEL32, msvcrt, ntdll in
+the second. GNU ld sorts the import sections by the name of the archive
+they come from (dlltool's import libraries rely on it). The last two DLLs
+come from import libraries that rustc writes into the build directory (the
+raw-dylib links of the standard library and of getrandom), the other
+three from mingw-w64's, in
+`/usr/lib/gcc/x86_64-w64-mingw32/13-win32/../../../../x86_64-w64-mingw32/lib`.
+So the binaries depend on whether the path of the build directory sorts
+before or after that one, and the recorded hashes are those of a build
+directory before it. The README said that the path of the checkout does
+not matter; that held for the checkout, but the build directory was in it.
+
+`build-windows.sh` now makes its build directories in a new directory
+under `/tmp`, checks that the linker takes `libkernel32.a` from that path,
+and refuses a `WINDOWS_BUILD_BASE` that does not sort before it. Checked in
+the same pod, with the checkout still in `/work/src`: the default run gave
+the recorded hashes, the shadowing check matched, and `/var/tb2` and
+`/usr/lib/gcc` were refused. With `RUSTUP_HOME` and `CARGO_HOME` moved to
+`/var` as well (which sorts after that path too) and the build directories
+under `/tmp`, the hashes were the recorded ones: in this pod, moving the
+toolchain and the crates there did not change the binaries. Nothing under
+`rust/src/` changed, and the hashes recorded above stand.
+
 ## Open questions for reviewers
 
 1. **The security argument.** Does FAEST v1.1 Theorems 1–2 (with BBD+23
