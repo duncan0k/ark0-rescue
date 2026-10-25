@@ -790,7 +790,7 @@ for byte).
 
 ## 2026-10-23 tools and verifier-only build
 
-Branch `cloud/c-r2-cli`, from `main` at `273f11b`. The protocol is
+A branch from `main` at `273f11b`. The protocol is
 unchanged: SPEC.md and the three vector files have the SHA-256 they had
 before (`c8b8773c…`, `e4ae3f6d…8097d3`, `9ec6ff5f…0a3535`,
 `562954f8…484cae`), and the Rust tests still reproduce the 4 vector and
@@ -1397,3 +1397,49 @@ The package (`python/voleith`):
 - `vc`, `vole`, `unihash`: GGM trees, VOLE, hashes;
 - `circuit`, `sha256_gadgets`, `sha256_ref`, `statements`: the constraint layer and statement 0x01;
 - `proof`: prove and verify.
+
+## Commit ids
+
+This repository was published from a working copy that had the same commits,
+with the same trees and messages, under other ids. `SPEC.md`, these notes and
+the reports cite commits by their ids there; the table gives the commit here
+for each.
+
+| cited | here | date | commit |
+|---|---|---|---|
+| `023cc6a` | `eb98702` | 2026-10-23 | rust: the exec trace must be complete; allowed paths are checked strictly |
+| `0623179` | `76fca97` | 2026-10-14 | docs: record the v0.2 tree-split measurements and choice in NOTES.md |
+| `08bf7fa` | `84adc72` | 2026-10-15 | docs: name the constant-time work by date, not by its work branch |
+| `16300e1` | `302bd43` | 2026-10-24 | rust: say what the build checks are for, and claim no more |
+| `1c7c354` | `f340d24` | 2026-10-24 | rust: exec_trace.py reports a malformed pin file instead of a traceback |
+| `2025d63` | `cfc1cf2` | 2026-10-23 | rust: build-windows.sh parses the whole exec trace and requires it |
+| `22a219a` | `c4f2a08` | 2026-10-23 | rust: check-verifier-only.sh gives every pattern a positive control |
+| `273f11b` | `10ef2d5` | 2026-10-15 | docs: NOTES, the 2026-10-15 branches are in main |
+| `2f0154e` | `7152932` | 2026-10-23 | voleith-prove: no crash dumps, --require-mlock, publish without replacing |
+| `38869ff` | `4496fb2` | 2026-10-24 | rust: pin the build tools before build 1; let compiler warnings through |
+| `4c20631` | `aedf353` | 2026-10-23 | rust: README, pipe the seed from the restore step; what is cleared |
+| `567ef40` | `9ed348a` | 2026-10-23 | docs: NOTES, round 2's type states allocate the sponge per hash call |
+| `580fabe` | `d9eec84` | 2026-10-14 | docs: NOTES, the 2026-10-14 internal reviews and revision 1 |
+| `608327e` | `eb94ca4` | 2026-10-23 | rust: README, every volume with a paging file must be encrypted |
+| `60ea57f` | `50e52d9` | 2026-10-23 | tools: --suffix checks length and digits before converting |
+| `63e2570` | `e4a5d5d` | 2026-10-23 | docs: NOTES, review round 1 of the tools and verifier-only build |
+| `6838470` | `ac88fd9` | 2026-10-23 | voleith-prove: pass prctl's arguments as c_ulong |
+| `6fa7940` | `68e4a17` | 2026-10-23 | rust: README, mlock does not keep pages out of a hibernation image |
+| `7898307` | `76fed32` | 2026-10-24 | rust: check-verifier-only.sh counts only complete nm lines |
+| `78f2a5f` | `c6378fb` | 2026-10-23 | rust: clear more copies of the prover's secrets; tools abort on panic |
+| `7fd4030` | `605e72c` | 2026-10-24 | rust: build-windows.sh, a positive control for the local-path scan |
+| `848d314` | `c4f9409` | 2026-10-23 | voleith-prove: a fault-injection build refuses to run outside the tests |
+| `84fa713` | `ea96298` | 2026-10-23 | rust: check-verifier-only.sh fails on a failed or incomplete scan |
+| `903efb4` | `f8d61c8` | 2026-10-24 | rust: check-verifier-only.sh, a failed tail and 8-character addresses |
+| `94fc7b6` | `4840b10` | 2026-10-23 | rust: Xof and XofReader type states instead of debug assertions |
+| `97ce9a0` | `fe1eb69` | 2026-10-23 | rust: build-windows.sh runs its tools by absolute path and checks them |
+| `a405ac5` | `a65ef88` | 2026-10-15 | docs: NOTES, the fuzzing results (3 h 15 min, no finding) |
+| `abac70a` | `9638be7` | 2026-10-24 | rust: no paths joined by separators; say exactly what is pinned |
+| `b32453d` | `97ea9ae` | 2026-10-15 | bench: median timings of prove and verify under the v0.2 split |
+| `b4b199d` | `73c45bc` | 2026-10-14 | Clean-room base: SPEC.md v0.2 revision 1 and its test vectors |
+| `c0cda88` | `d0d1078` | 2026-10-24 | rust: the nm self-test uses committed listings; two lost statuses |
+| `c230258` | `2959908` | 2026-10-23 | test: the injected panic's exit is asserted per platform |
+| `dece70f` | `f6d5431` | 2026-10-23 | rust: scripts scan files directly, never pipe into an early-exiting grep |
+| `f5a2bc0` | `3c90cd4` | 2026-10-24 | rust: the fixture name without basename; narrow two descriptions |
+| `f720897` | `62c8ad1` | 2026-10-23 | rust: build-windows.sh fixes its environment and checks its tools |
+| `ff4ea00` | `1cb5c9c` | 2026-10-23 | docs: NOTES, the 2026-10-23 tools and verifier-only build |
