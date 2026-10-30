@@ -4,7 +4,7 @@ Proofs of seed knowledge for the rescue lane of the Ark-0 test signet: their spe
 implementations. A proof shows, in zero knowledge, that the prover knows a seed `x` with
 `HMAC-SHA256(K, x || suffix) = y` (statement `0x01`). It is a VOLE-in-the-head proof of 130,218 bytes.
 
-From height 63000 the nodes of Ark-0 accept such a proof, in a P2MR leaf of version `0xe0`, in place of an
+From height 51000 the nodes of Ark-0 accept such a proof, in a P2MR leaf of version `0xe0`, in place of an
 elliptic curve signature that the network's tripwire has disabled, with `y` the secret key of the key the
 leaf checks. That is the M4-R series of
 [bitcoin-p2mr-patches](https://github.com/duncan0k/bitcoin-p2mr-patches), which vendors the Rust crate of
